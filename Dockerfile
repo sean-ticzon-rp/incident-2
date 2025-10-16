@@ -22,11 +22,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy app code
 COPY . .
 
-# Make start script executable
-RUN chmod +x start.sh
-
-# Expose port (Railway will use this)
+# Expose port (Railway will map this dynamically)
 EXPOSE 8000
 
-# Use startup script
-CMD ["./start.sh"]
+# Default CMD (Procfile will override this on Railway)
+CMD ["uvicorn", "simple_api_upgraded:app", "--host", "0.0.0.0", "--port", "8000"]
