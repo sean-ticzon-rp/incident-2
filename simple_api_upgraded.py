@@ -28,16 +28,25 @@ load_dotenv()  # This will load all variables from .env
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Import RAG system
-from rag_system import IncidentRAG
+# ============================================================================
+# RAG SYSTEM SETUP
+# ============================================================================
 
-QDRANT_URL = os.getenv("QDRANT_URL")
-QDRANT_API_KEY = os.getenv("QDRANT_API_KEY")
-HUGGINGFACE_API_KEY = os.getenv("HUGGINGFACE_API_KEY")
+RAG_AVAILABLE = False  # default to False
+
+try:
+    from rag_system import IncidentRAG, seed_example_data
+    RAG_AVAILABLE = True
+except ImportError:
+    logger.warning("⚠️  RAG system not available.")
 
 rag = None
 if RAG_AVAILABLE:
     try:
+        QDRANT_URL = os.getenv("QDRANT_URL")
+        QDRANT_API_KEY = os.getenv("QDRANT_API_KEY")
+        HUGGINGFACE_API_KEY = os.getenv("HUGGINGFACE_API_KEY")
+
         rag = IncidentRAG(
             qdrant_url=QDRANT_URL,
             qdrant_api_key=QDRANT_API_KEY,
@@ -46,14 +55,6 @@ if RAG_AVAILABLE:
         logger.info(f"✅ RAG initialized with {rag.count_incidents()} incidents")
     except Exception as e:
         logger.error(f"⚠️ Could not initialize RAG: {e}")
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
 # ============================================================================
 # CONFIGURATION - Set your API key here or in environment variable
