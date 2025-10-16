@@ -539,6 +539,27 @@ def home():
             "conversation": ["/conversation/{incident_id}"]
         }
     }
+@app.get("/debug/qdrant")
+async def debug_qdrant():
+    """Debug Qdrant connection"""
+    qdrant_url = os.getenv("QDRANT_URL", "not set")
+    
+    # Try to ping Qdrant
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(qdrant_url)
+            return {
+                "qdrant_url": qdrant_url,
+                "status": "reachable",
+                "status_code": response.status_code,
+                "response": response.json() if response.text else "no content"
+            }
+    except Exception as e:
+        return {
+            "qdrant_url": qdrant_url,
+            "status": "unreachable",
+            "error": str(e)
+        }
 
 @app.get("/health")
 async def health_check():
