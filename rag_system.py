@@ -27,29 +27,25 @@ class IncidentRAG:
     ):
         """Initialize RAG system"""
         try:
+            # Use environment variable if provided
+            qdrant_url = qdrant_url or os.getenv("QDRANT_URL", "http://localhost:6333")
+            qdrant_api_key = os.getenv("QDRANT_API_KEY", None)
+            
+            # Connect to Qdrant
+            self.client = QdrantClient(url=qdrant_url, api_key=qdrant_api_key, timeout=60.0)
+            
             self.collection_name = collection_name
             self.embedding_dim = 384
-
-            # Use Qdrant Cloud URL and API key from env
-            qdrant_url = qdrant_url or os.getenv("QDRANT_URL", "http://localhost:6333")
-            qdrant_api_key = os.getenv("QDRANT_API_KEY")
-
-            self.client = QdrantClient(
-                url=qdrant_url,
-                api_key=qdrant_api_key,
-                timeout=60.0
-            )
-            logger.info(f"✅ Connected to Qdrant Cloud: {qdrant_url}")
-
+            
             if not HF_API_KEY:
                 logger.warning("⚠️  HUGGINGFACE_API_KEY not set - embeddings will fail!")
-
-            # Create collection if it doesn't exist
+            
             self._init_collection()
             logger.info("✅ RAG system initialized (Hugging Face API)")
         except Exception as e:
             logger.error(f"Failed to initialize RAG: {e}")
             raise
+
 
 
     
