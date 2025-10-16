@@ -521,30 +521,37 @@ Conversational style. Under 200 words."""
 # ============================================================================
 
 @app.get("/")
-def home():
+async def home():
     """Home endpoint"""
-    incident_count = rag.count_incidents() if rag else 0
-    
-    return {
-        "status": "🚀 Incident AI - Groq API Edition",
-        "version": "2.0 - No Ollama Download Needed!",
-        "model": MODEL_NAME,
-        "api_provider": "Groq (FREE)",
-        "services": {
-            "groq_api": "✅ ready" if GROQ_API_KEY else "❌ API key not set",
-            "rag": "✅ enabled" if rag else "❌ disabled"
-        },
-        "knowledge_base": {
-            "incidents": incident_count,
-            "auto_learning": True
-        },
-        "endpoints": {
-            "analysis": ["/analyze", "/analyze/stream", "/analyze/agentic-stream"],
-            "incidents": ["/incidents/add", "/incidents/search", "/incidents/list"],
-            "analytics": ["/api/analytics/overview", "/api/analytics/export"],
-            "conversation": ["/conversation/{incident_id}"]
+    try:
+        incident_count = rag.count_incidents() if rag else 0
+        
+        return {
+            "status": "🚀 Incident AI - Groq API Edition",
+            "version": "2.0 - No Ollama Download Needed!",
+            "model": MODEL_NAME,
+            "api_provider": "Groq (FREE)",
+            "services": {
+                "groq_api": "✅ ready" if GROQ_API_KEY else "❌ API key not set",
+                "rag": "✅ enabled" if rag else "❌ disabled"
+            },
+            "knowledge_base": {
+                "incidents": incident_count,
+                "auto_learning": True
+            },
+            "endpoints": {
+                "analysis": ["/analyze", "/analyze/stream", "/analyze/agentic-stream"],
+                "incidents": ["/incidents/add", "/incidents/search", "/incidents/list"],
+                "analytics": ["/api/analytics/overview", "/api/analytics/export"],
+                "conversation": ["/conversation/{incident_id}"]
+            }
         }
-    }
+    except Exception as e:
+        logger.error(f"Error in home endpoint: {e}")
+        return {
+            "status": "error",
+            "message": str(e)
+        }
 
 @app.get("/debug/qdrant")
 async def debug_qdrant():
