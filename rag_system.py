@@ -1,22 +1,28 @@
 """
-RAG System - Manages vector database for past incidents
-Allows AI to search and learn from your history
-OPTIMIZED VERSION - Uses lighter embedding model
+RAG System - Using Hugging Face Inference API for embeddings
+NO PyTorch needed - keeps Docker image small!
 """
 
 from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, VectorParams, PointStruct, Filter, FieldCondition, MatchValue
-from sentence_transformers import SentenceTransformer
+import httpx
 import uuid
 import logging
+import os
+import asyncio
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Hugging Face API configuration
+HF_API_KEY = os.getenv("HUGGINGFACE_API_KEY", "")
+EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
+HF_API_URL = f"https://api-inference.huggingface.co/pipeline/feature-extraction/{EMBEDDING_MODEL}"
+
 class IncidentRAG:
     """
     RAG system for incident management
-    Stores and retrieves past incidents using vector similarity
+    Uses Hugging Face API for embeddings (no local model!)
     """
     
     def __init__(
@@ -27,15 +33,14 @@ class IncidentRAG:
         """Initialize RAG system"""
         self.client = QdrantClient(url=qdrant_url)
         self.collection_name = collection_name
+        self.embedding_dim = 384  # Dimension of all-MiniLM-L6-v2
         
-        # Load embedding model (OPTIMIZED: smaller, faster model)
-        logger.info("Loading embedding model...")
-        self.embedder = SentenceTransformer('paraphrase-MiniLM-L3-v2')  # 3x smaller than L6-v2
-        self.embedding_dim = 384  # Dimension for this model
+        if not HF_API_KEY:
+            logger.warning("⚠️  HUGGINGFACE_API_KEY not set - embeddings will fail!")
         
         # Create collection if it doesn't exist
         self._init_collection()
-        logger.info("✅ RAG system initialized")
+        logger.info("✅ RAG system initialized (Hugging Face API)")
     
     def _init_collection(self):
         """Create vector collection for incidents"""
@@ -51,6 +56,50 @@ class IncidentRAG:
                 )
             )
             logger.info(f"Created collection '{self.collection_name}'")
+    
+    async def _get_embedding_async(self, text: str) -> list:
+        """Get embedding from Hugging Face API (async)"""
+        if not HF_API_KEY:
+            raise Exception("HUGGINGFACE_API_KEY not set")
+        
+        headers = {
+            "Authorization": f"Bearer {HF_API_KEY}",
+            "Content-Type": "application/json"
+        }
+        
+        payload = {
+            "inputs": text,
+            "options": {
+                "wait_for_model": True
+            }
+        }
+        
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(HF_API_URL, headers=headers, json=payload)
+            
+            if response.status_code == 200:
+                result = response.json()
+                # HF API returns nested array, flatten it
+                if isinstance(result, list) and len(result) > 0:
+                    return result[0] if isinstance(result[0], list) else result
+                return result
+            elif response.status_code == 503:
+                # Model is loading, wait and retry
+                logger.info("Model loading, retrying...")
+                await asyncio.sleep(2)
+                return await self._get_embedding_async(text)
+            else:
+                raise Exception(f"Hugging Face API error: {response.status_code} - {response.text}")
+    
+    def _get_embedding_sync(self, text: str) -> list:
+        """Synchronous wrapper for getting embeddings"""
+        try:
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+        
+        return loop.run_until_complete(self._get_embedding_async(text))
     
     def add_incident(
         self,
@@ -76,8 +125,12 @@ class IncidentRAG:
         Resolution: {resolution}
         """.strip()
         
-        # Convert to vector
-        embedding = self.embedder.encode(text).tolist()
+        # Get embedding from Hugging Face API
+        try:
+            embedding = self._get_embedding_sync(text)
+        except Exception as e:
+            logger.error(f"Failed to get embedding: {e}")
+            raise
         
         # Create point
         doc_id = str(uuid.uuid4())
@@ -116,8 +169,12 @@ class IncidentRAG:
         Search for similar past incidents
         """
         
-        # Convert query to vector
-        query_vector = self.embedder.encode(query).tolist()
+        # Get embedding from Hugging Face API
+        try:
+            query_vector = self._get_embedding_sync(query)
+        except Exception as e:
+            logger.error(f"Failed to get embedding for search: {e}")
+            return []
         
         # Build search parameters
         search_params = {
@@ -226,7 +283,10 @@ def seed_example_data(rag: IncidentRAG):
     
     print("\n📥 Seeding example incidents...")
     for example in examples:
-        rag.add_incident(**example)
+        try:
+            rag.add_incident(**example)
+        except Exception as e:
+            print(f"Failed to add {example['incident_id']}: {e}")
     
     print(f"✅ Added {len(examples)} example incidents")
     print(f"📊 Total incidents in database: {rag.count_incidents()}")
