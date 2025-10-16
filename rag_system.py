@@ -31,16 +31,21 @@ class IncidentRAG:
         collection_name: str = "incidents"
     ):
         """Initialize RAG system"""
-        self.client = QdrantClient(url=qdrant_url)
-        self.collection_name = collection_name
-        self.embedding_dim = 384  # Dimension of all-MiniLM-L6-v2
-        
-        if not HF_API_KEY:
-            logger.warning("⚠️  HUGGINGFACE_API_KEY not set - embeddings will fail!")
-        
-        # Create collection if it doesn't exist
-        self._init_collection()
-        logger.info("✅ RAG system initialized (Hugging Face API)")
+        try:
+            # Increase timeout for Railway's slower network
+            self.client = QdrantClient(url=qdrant_url, timeout=60.0)
+            self.collection_name = collection_name
+            self.embedding_dim = 384
+            
+            if not HF_API_KEY:
+                logger.warning("⚠️  HUGGINGFACE_API_KEY not set - embeddings will fail!")
+            
+            # Create collection if it doesn't exist
+            self._init_collection()
+            logger.info("✅ RAG system initialized (Hugging Face API)")
+        except Exception as e:
+            logger.error(f"Failed to initialize RAG: {e}")
+            raise
     
     def _init_collection(self):
         """Create vector collection for incidents"""
