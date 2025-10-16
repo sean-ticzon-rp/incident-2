@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: incident-ai
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python simple_api_upgraded.py
+    envVars:
+      - key: OLLAMA_URL
+        value: http://ollama:11434
+      - key: QDRANT_URL
+        value: http://qdrant:6333
+
+  - type: pserv
+    name: ollama
+    runtime: docker
+    dockerfilePath: ./Dockerfile.ollama
+    
+  - type: pserv
+    name: qdrant
+    runtime: docker
+    dockerfilePath: ./Dockerfile.qdrant
