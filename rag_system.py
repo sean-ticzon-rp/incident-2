@@ -1,6 +1,7 @@
 """
 RAG System - Manages vector database for past incidents
 Allows AI to search and learn from your history
+OPTIMIZED VERSION - Uses lighter embedding model
 """
 
 from qdrant_client import QdrantClient
@@ -27,10 +28,10 @@ class IncidentRAG:
         self.client = QdrantClient(url=qdrant_url)
         self.collection_name = collection_name
         
-        # Load embedding model (small and fast)
+        # Load embedding model (OPTIMIZED: smaller, faster model)
         logger.info("Loading embedding model...")
-        self.embedder = SentenceTransformer('all-MiniLM-L6-v2')
-        self.embedding_dim = 384  # Dimension of all-MiniLM-L6-v2
+        self.embedder = SentenceTransformer('paraphrase-MiniLM-L3-v2')  # 3x smaller than L6-v2
+        self.embedding_dim = 384  # Dimension for this model
         
         # Create collection if it doesn't exist
         self._init_collection()
