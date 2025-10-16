@@ -27,25 +27,36 @@ class IncidentRAG:
     
     def __init__(
         self,
-        qdrant_url: str = "http://localhost:6333",
+        qdrant_url: str = None,
         collection_name: str = "incidents"
     ):
         """Initialize RAG system"""
         try:
-            # Increase timeout for Railway's slower network
-            self.client = QdrantClient(url=qdrant_url, timeout=60.0)
+            # Read from environment variables (use cloud if available)
+            qdrant_url = qdrant_url or os.getenv("QDRANT_URL", "http://localhost:6333")
+            qdrant_api_key = os.getenv("QDRANT_API_KEY", None)
+
+            # Initialize Qdrant client (use API key if provided)
+            if qdrant_api_key:
+                self.client = QdrantClient(url=qdrant_url, api_key=qdrant_api_key, timeout=60.0)
+                logger.info(f"✅ Connected to Qdrant Cloud: {qdrant_url}")
+            else:
+                self.client = QdrantClient(url=qdrant_url, timeout=60.0)
+                logger.info(f"✅ Connected to local Qdrant instance: {qdrant_url}")
+
             self.collection_name = collection_name
             self.embedding_dim = 384
-            
+
             if not HF_API_KEY:
                 logger.warning("⚠️  HUGGINGFACE_API_KEY not set - embeddings will fail!")
-            
+
             # Create collection if it doesn't exist
             self._init_collection()
             logger.info("✅ RAG system initialized (Hugging Face API)")
         except Exception as e:
             logger.error(f"Failed to initialize RAG: {e}")
             raise
+
     
     def _init_collection(self):
         """Create vector collection for incidents"""

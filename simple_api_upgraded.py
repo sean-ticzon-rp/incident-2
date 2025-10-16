@@ -17,7 +17,7 @@ from datetime import datetime, timedelta
 import logging
 import asyncio
 from dotenv import load_dotenv
-load_dotenv()  # Load .env file
+load_dotenv()
 
 
 
