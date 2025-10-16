@@ -36,9 +36,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
-
-
 # Setup logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -59,12 +56,12 @@ except ImportError:
 
 if RAG_AVAILABLE:
     try:
-        QDRANT_URL = os.getenv("QDRANT_URL")  # Your Cloud URL
-        rag = IncidentRAG(qdrant_url=QDRANT_URL)  # Only pass this
+        # FIX: IncidentRAG only accepts collection_name parameter
+        # It reads QDRANT_URL from environment variables internally
+        rag = IncidentRAG(collection_name="incidents")
         logger.info(f"✅ RAG initialized with {rag.count_incidents()} incidents")
     except Exception as e:
         logger.error(f"⚠️ Could not initialize RAG: {e}")
-
 
 # ============================================================================
 # CONFIGURATION - Set your API key here or in environment variable
@@ -75,8 +72,6 @@ GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 
 # Choose model (all FREE on Groq!)
 MODEL_NAME = "llama-3.1-8b-instant"  # ⭐⭐⭐⭐⭐ Fast & smart
-# MODEL_NAME = "llama-3.1-70b-versatile"  # ⭐⭐⭐⭐⭐ Best quality (slower)
-# MODEL_NAME = "mixtral-8x7b-32768"  # ⭐⭐⭐⭐ Long context
 
 QDRANT_URL = os.getenv("QDRANT_URL", "http://localhost:6333")
 
@@ -141,7 +136,7 @@ class AdaptiveLLMConfig:
             "temperature": 0.7,
             "top_p": 0.9,
             "max_tokens": 600,
-            "frequency_penalty": 0.3,  # Reduce repetition
+            "frequency_penalty": 0.3,
             "presence_penalty": 0.2
         }
         self.response_history = deque(maxlen=20)
@@ -291,14 +286,6 @@ class ContextGatherer:
 # INITIALIZE SYSTEMS
 # ============================================================================
 
-rag = None
-if RAG_AVAILABLE:
-    try:
-        rag = IncidentRAG(qdrant_url=QDRANT_URL)
-        logger.info(f"✅ RAG initialized with {rag.count_incidents()} incidents")
-    except Exception as e:
-        logger.error(f"⚠️  Could not initialize RAG: {e}")
-
 adaptive_config = AdaptiveLLMConfig()
 context_gatherer = ContextGatherer()
 conversation_manager = ConversationManager()
@@ -342,21 +329,19 @@ def build_messages(prompt: str, conversation_history: List[Dict] = None) -> List
         {"role": "system", "content": "You are an expert SRE assistant helping analyze incidents."}
     ]
     
-    # Add conversation history if exists
     if conversation_history:
-        for msg in conversation_history[-4:]:  # Last 4 messages
+        for msg in conversation_history[-4:]:
             messages.append({
                 "role": msg["role"],
                 "content": msg["content"]
             })
     
-    # Add current prompt
     messages.append({"role": "user", "content": prompt})
     
     return messages
 
 # ============================================================================
-# PROMPT BUILDERS (same as before)
+# PROMPT BUILDERS
 # ============================================================================
 
 def build_conversation_aware_prompt(
@@ -560,12 +545,12 @@ def home():
             "conversation": ["/conversation/{incident_id}"]
         }
     }
+
 @app.get("/debug/qdrant")
 async def debug_qdrant():
     """Debug Qdrant connection"""
     qdrant_url = os.getenv("QDRANT_URL", "not set")
     
-    # Try to ping Qdrant
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             response = await client.get(qdrant_url)
@@ -622,7 +607,6 @@ async def health_check():
     }
     
     return health_status
-
 # ============================================================================
 # ANALYSIS ENDPOINTS
 # ============================================================================
