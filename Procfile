@@ -1,1 +1,1 @@
-web: uvicorn simple_api_upgraded:app --host 0.0.0.0 --port $PORT --proxy-headers --forwarded-allow-ips='*'
+web: uvicorn simple_api_upgraded:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips='*'
