@@ -29,18 +29,23 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Import RAG system
-try:
-    from rag_system import IncidentRAG, seed_example_data
-    RAG_AVAILABLE = True
-except ImportError:
-    RAG_AVAILABLE = False
-    logger.warning("⚠️  RAG system not available.")
+from rag_system import IncidentRAG
 
-app = FastAPI(
-    title="Incident AI - Groq API Edition",
-    description="🏆 Advanced AI-powered incident analysis with RAG - using Groq API",
-    version="2.0"
-)
+QDRANT_URL = os.getenv("QDRANT_URL")
+QDRANT_API_KEY = os.getenv("QDRANT_API_KEY")
+HUGGINGFACE_API_KEY = os.getenv("HUGGINGFACE_API_KEY")
+
+rag = None
+if RAG_AVAILABLE:
+    try:
+        rag = IncidentRAG(
+            qdrant_url=QDRANT_URL,
+            qdrant_api_key=QDRANT_API_KEY,
+            hf_api_key=HUGGINGFACE_API_KEY
+        )
+        logger.info(f"✅ RAG initialized with {rag.count_incidents()} incidents")
+    except Exception as e:
+        logger.error(f"⚠️ Could not initialize RAG: {e}")
 
 app.add_middleware(
     CORSMiddleware,
