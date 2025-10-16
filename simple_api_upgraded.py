@@ -16,8 +16,11 @@ from collections import defaultdict, deque
 from datetime import datetime, timedelta
 import logging
 import asyncio
+
 from dotenv import load_dotenv
-load_dotenv()
+import os
+
+load_dotenv()  # This will load all variables from .env
 
 
 

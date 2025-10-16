@@ -30,11 +30,10 @@ class IncidentRAG:
             self.collection_name = collection_name
             self.embedding_dim = 384
 
-            # Use QDRANT_URL from env if not provided
+            # Use Qdrant Cloud URL and API key from env
             qdrant_url = qdrant_url or os.getenv("QDRANT_URL", "http://localhost:6333")
             qdrant_api_key = os.getenv("QDRANT_API_KEY")
 
-            # Connect to Qdrant Cloud
             self.client = QdrantClient(
                 url=qdrant_url,
                 api_key=qdrant_api_key,
@@ -51,6 +50,7 @@ class IncidentRAG:
         except Exception as e:
             logger.error(f"Failed to initialize RAG: {e}")
             raise
+
 
     
     def _init_collection(self):
