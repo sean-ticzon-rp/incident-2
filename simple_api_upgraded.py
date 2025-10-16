@@ -18,9 +18,24 @@ import logging
 import asyncio
 
 from dotenv import load_dotenv
-import os
 
-load_dotenv()  # This will load all variables from .env
+load_dotenv()  # Load .env variables
+
+# Define app first
+app = FastAPI(
+    title="Incident AI - Groq API Edition",
+    description="🏆 Advanced AI-powered incident analysis with RAG - using Groq API",
+    version="2.0"
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 
 
 
@@ -32,15 +47,16 @@ logger = logging.getLogger(__name__)
 # RAG SYSTEM SETUP
 # ============================================================================
 
-RAG_AVAILABLE = False  # default to False
+# RAG system setup
+RAG_AVAILABLE = False
+rag = None
 
 try:
     from rag_system import IncidentRAG, seed_example_data
     RAG_AVAILABLE = True
 except ImportError:
-    logger.warning("⚠️  RAG system not available.")
+    logger.warning("⚠️ RAG system not available.")
 
-rag = None
 if RAG_AVAILABLE:
     try:
         QDRANT_URL = os.getenv("QDRANT_URL")
@@ -55,6 +71,7 @@ if RAG_AVAILABLE:
         logger.info(f"✅ RAG initialized with {rag.count_incidents()} incidents")
     except Exception as e:
         logger.error(f"⚠️ Could not initialize RAG: {e}")
+
 
 # ============================================================================
 # CONFIGURATION - Set your API key here or in environment variable
