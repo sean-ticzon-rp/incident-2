@@ -20,11 +20,6 @@ EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 HF_API_URL = f"https://api-inference.huggingface.co/pipeline/feature-extraction/{EMBEDDING_MODEL}"
 
 class IncidentRAG:
-    """
-    RAG system for incident management
-    Uses Hugging Face API for embeddings (no local model!)
-    """
-    
     def __init__(
         self,
         qdrant_url: str = None,
@@ -32,20 +27,20 @@ class IncidentRAG:
     ):
         """Initialize RAG system"""
         try:
-            # Read from environment variables (use cloud if available)
-            qdrant_url = qdrant_url or os.getenv("QDRANT_URL", "http://localhost:6333")
-            qdrant_api_key = os.getenv("QDRANT_API_KEY", None)
-
-            # Initialize Qdrant client (use API key if provided)
-            if qdrant_api_key:
-                self.client = QdrantClient(url=qdrant_url, api_key=qdrant_api_key, timeout=60.0)
-                logger.info(f"✅ Connected to Qdrant Cloud: {qdrant_url}")
-            else:
-                self.client = QdrantClient(url=qdrant_url, timeout=60.0)
-                logger.info(f"✅ Connected to local Qdrant instance: {qdrant_url}")
-
             self.collection_name = collection_name
             self.embedding_dim = 384
+
+            # Use QDRANT_URL from env if not provided
+            qdrant_url = qdrant_url or os.getenv("QDRANT_URL", "http://localhost:6333")
+            qdrant_api_key = os.getenv("QDRANT_API_KEY")
+
+            # Connect to Qdrant Cloud
+            self.client = QdrantClient(
+                url=qdrant_url,
+                api_key=qdrant_api_key,
+                timeout=60.0
+            )
+            logger.info(f"✅ Connected to Qdrant Cloud: {qdrant_url}")
 
             if not HF_API_KEY:
                 logger.warning("⚠️  HUGGINGFACE_API_KEY not set - embeddings will fail!")
