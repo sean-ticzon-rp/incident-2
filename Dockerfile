@@ -1,18 +1,18 @@
-# Use a small Python base image
+# Use lightweight Python base
 FROM python:3.11-slim
 
-# Set environment
+# Set working directory
 WORKDIR /app
 
-# Install dependencies
+# Copy and install dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy code
+# Copy app source code
 COPY . .
 
-# Expose port (Cloudflare will map automatically)
+# Expose the port Railway uses
 EXPOSE 8000
 
-# Start FastAPI with Uvicorn
+# Run FastAPI app
 CMD ["uvicorn", "simple_api_upgraded:app", "--host", "0.0.0.0", "--port", "8000"]
