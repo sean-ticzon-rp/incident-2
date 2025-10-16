@@ -59,15 +59,8 @@ except ImportError:
 
 if RAG_AVAILABLE:
     try:
-        QDRANT_URL = os.getenv("QDRANT_URL")
-        QDRANT_API_KEY = os.getenv("QDRANT_API_KEY")
-        HUGGINGFACE_API_KEY = os.getenv("HUGGINGFACE_API_KEY")
-
-        rag = IncidentRAG(
-            qdrant_url=QDRANT_URL,
-            qdrant_api_key=QDRANT_API_KEY,
-            hf_api_key=HUGGINGFACE_API_KEY
-        )
+        QDRANT_URL = os.getenv("QDRANT_URL")  # Your Cloud URL
+        rag = IncidentRAG(qdrant_url=QDRANT_URL)  # Only pass this
         logger.info(f"✅ RAG initialized with {rag.count_incidents()} incidents")
     except Exception as e:
         logger.error(f"⚠️ Could not initialize RAG: {e}")
