@@ -22,8 +22,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy app code
 COPY . .
 
-# Expose port (Railway/Render/Cloud Run will map the port for you)
+# Expose port (Railway will use this)
 EXPOSE 8000
 
-# Use PORT env if provided by hosting; fallback to 8000
-CMD ["sh", "-c", "uvicorn simple_api_upgraded:app --host 0.0.0.0 --port ${PORT:-8000} --proxy-headers"]
+# Use Railway's PORT env variable with better proxy settings
+CMD uvicorn simple_api_upgraded:app --host 0.0.0.0 --port ${PORT:-8000} --proxy-headers --forwarded-allow-ips='*'
