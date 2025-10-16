@@ -19,11 +19,7 @@ import asyncio
 from dotenv import load_dotenv
 load_dotenv()  # Load .env file
 
-from rag_system import IncidentRAG, seed_example_data
 
-# Initialize RAG
-qdrant_url = os.getenv("QDRANT_URL", "http://localhost:6333")
-rag = IncidentRAG(qdrant_url=qdrant_url)
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
