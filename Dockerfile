@@ -22,8 +22,11 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy app code
 COPY . .
 
+# Make start script executable
+RUN chmod +x start.sh
+
 # Expose port (Railway will use this)
 EXPOSE 8000
 
-# Use Railway's PORT env variable with better proxy settings
-CMD uvicorn simple_api_upgraded:app --host 0.0.0.0 --port ${PORT:-8000} --proxy-headers --forwarded-allow-ips='*'
+# Use startup script
+CMD ["./start.sh"]
