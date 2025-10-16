@@ -11,6 +11,7 @@ import asyncio
 import httpx
 from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, VectorParams, PointStruct, Filter, FieldCondition, MatchValue
+from qdrant_client.http.exceptions import UnexpectedResponse
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -48,17 +49,30 @@ class IncidentRAG:
     def _init_collection(self):
         """Create vector collection for incidents if it doesn't exist"""
         try:
-            self.client.get_collection(self.collection_name)
-            logger.info(f"Collection '{self.collection_name}' already exists")
-        except Exception:
-            self.client.create_collection(
-                collection_name=self.collection_name,
-                vectors_config=VectorParams(
-                    size=self.embedding_dim,
-                    distance=Distance.COSINE
+            # Try to get the collection
+            collection_info = self.client.get_collection(self.collection_name)
+            logger.info(f"✅ Collection '{self.collection_name}' already exists ({collection_info.points_count} incidents)")
+        except Exception as get_error:
+            # Collection doesn't exist, try to create it
+            try:
+                self.client.create_collection(
+                    collection_name=self.collection_name,
+                    vectors_config=VectorParams(
+                        size=self.embedding_dim,
+                        distance=Distance.COSINE
+                    )
                 )
-            )
-            logger.info(f"Created collection '{self.collection_name}'")
+                logger.info(f"✅ Created new collection '{self.collection_name}'")
+            except UnexpectedResponse as create_error:
+                # Handle the case where collection was created between our check and create attempt
+                if "already exists" in str(create_error).lower():
+                    logger.info(f"✅ Collection '{self.collection_name}' already exists (race condition handled)")
+                else:
+                    logger.error(f"Failed to create collection: {create_error}")
+                    raise
+            except Exception as create_error:
+                logger.error(f"Failed to create collection: {create_error}")
+                raise
 
     async def _get_embedding_async(self, text: str) -> list:
         """Get embedding from Hugging Face API (async)"""
