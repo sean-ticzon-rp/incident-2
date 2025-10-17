@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 # Hugging Face API configuration
 HF_API_KEY = os.getenv("HUGGINGFACE_API_KEY", "")
 EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
-HF_API_URL = f"https://api-inference.huggingface.co/pipeline/feature-extraction/{EMBEDDING_MODEL}"
+HF_API_URL = f"https://api-inference.huggingface.co/models/{EMBEDDING_MODEL}"
 
 class IncidentRAG:
     """
@@ -74,8 +74,8 @@ class IncidentRAG:
                 logger.error(f"Failed to create collection: {create_error}")
                 raise
 
-    async def _get_embedding_async(self, text: str) -> list:
-        """Get embedding from Hugging Face API (async)"""
+    async def get_embedding(self, text: str) -> list:
+        """Get embedding from Hugging Face API (async) - PUBLIC METHOD"""
         if not HF_API_KEY:
             raise Exception("HUGGINGFACE_API_KEY not set")
 
@@ -100,26 +100,18 @@ class IncidentRAG:
             elif response.status_code == 503:
                 logger.info("Model loading, retrying...")
                 await asyncio.sleep(2)
-                return await self._get_embedding_async(text)
+                return await self.get_embedding(text)
             else:
                 raise Exception(f"Hugging Face API error: {response.status_code} - {response.text}")
 
-    def _get_embedding_sync(self, text: str) -> list:
-        """Synchronous wrapper for getting embeddings"""
-        try:
-            loop = asyncio.get_event_loop()
-        except RuntimeError:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-        return loop.run_until_complete(self._get_embedding_async(text))
-
-    def add_incident(self, incident_id: str, title: str, description: str,
-                     service: str, root_cause: str = "", resolution: str = "",
-                     severity: str = "medium", tags: list = None) -> str:
-        """Add a past incident to the knowledge base"""
+    async def add_incident_async(self, incident_id: str, title: str, description: str,
+                                 service: str, root_cause: str = "", resolution: str = "",
+                                 severity: str = "medium", tags: list = None) -> str:
+        """Add a past incident to the knowledge base (ASYNC VERSION)"""
         text = f"Incident: {title}\nDescription: {description}\nService: {service}\nRoot Cause: {root_cause}\nResolution: {resolution}".strip()
+        
         try:
-            embedding = self._get_embedding_sync(text)
+            embedding = await self.get_embedding(text)
         except Exception as e:
             logger.error(f"Failed to get embedding: {e}")
             raise
@@ -145,10 +137,10 @@ class IncidentRAG:
         logger.info(f"Added incident: {incident_id}")
         return doc_id
 
-    def search_similar(self, query: str, service: str = None, limit: int = 3) -> list:
-        """Search for similar past incidents"""
+    async def search_similar_async(self, query: str, service: str = None, limit: int = 3) -> list:
+        """Search for similar past incidents (ASYNC VERSION)"""
         try:
-            query_vector = self._get_embedding_sync(query)
+            query_vector = await self.get_embedding(query)
         except Exception as e:
             logger.error(f"Failed to get embedding for search: {e}")
             return []
@@ -190,8 +182,8 @@ class IncidentRAG:
             return 0
 
 # Optional helper to seed example data
-def seed_example_data(rag: IncidentRAG):
-    """Add some example incidents for testing"""
+async def seed_example_data_async(rag: IncidentRAG):
+    """Add some example incidents for testing (ASYNC VERSION)"""
     examples = [
         {
             "incident_id": "INC-00234",
@@ -215,5 +207,5 @@ def seed_example_data(rag: IncidentRAG):
         }
     ]
     for ex in examples:
-        rag.add_incident(**ex)
+        await rag.add_incident_async(**ex)
     logger.info(f"✅ Seeded {len(examples)} example incidents")
