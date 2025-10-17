@@ -117,7 +117,10 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 
 # Choose model (all FREE on Groq!)
-MODEL_NAME = "llama-3.1-8b-instant"  # ⭐⭐⭐⭐⭐ Fast & smart
+MODEL_NAME = "llama-3.3-70b-versatile"  # ⭐⭐⭐⭐⭐ BEST - Smartest & most capable
+# MODEL_NAME = "llama-3.1-70b-versatile"  # ⭐⭐⭐⭐⭐ Very smart alternative
+# MODEL_NAME = "mixtral-8x7b-32768"  # ⭐⭐⭐⭐ Good balance, longer context
+# MODEL_NAME = "llama-3.1-8b-instant"  # ⭐⭐⭐ Fast but less intelligent
 
 QDRANT_URL = os.getenv("QDRANT_URL", "http://localhost:6333")
 
