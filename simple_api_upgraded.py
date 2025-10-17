@@ -372,30 +372,128 @@ async def call_groq_api(messages: List[Dict], stream: bool = False):
     
     return headers, payload
 
+# ============================================================================
+# INTELLIGENT MESSAGE CLASSIFICATION
+# ============================================================================
+
+async def classify_message_intent(text: str) -> Dict[str, Any]:
+    """
+    Use the LLM itself to classify the user's intent dynamically.
+    No hardcoded lists - fully intelligent classification!
+    """
+    classification_prompt = f"""Analyze this user message and classify its intent.
+
+User message: "{text}"
+
+Classify into ONE of these categories:
+1. GREETING - Casual greetings, small talk, asking how you are
+2. CAPABILITY_INQUIRY - Asking what you can do, your features, capabilities
+3. INCIDENT_REPORT - Describing a technical problem, error, or incident
+4. FOLLOW_UP - Follow-up question on an ongoing conversation
+5. GENERAL_QUESTION - General technical question not about a specific incident
+
+Respond ONLY with this JSON format:
+{{
+  "category": "GREETING|CAPABILITY_INQUIRY|INCIDENT_REPORT|FOLLOW_UP|GENERAL_QUESTION",
+  "confidence": 0.0-1.0,
+  "reasoning": "brief explanation"
+}}"""
+
+    try:
+        headers = {
+            "Authorization": f"Bearer {GROQ_API_KEY}",
+            "Content-Type": "application/json"
+        }
+        
+        payload = {
+            "model": "llama-3.1-8b-instant",  # Fast model for classification
+            "messages": [{"role": "user", "content": classification_prompt}],
+            "temperature": 0.1,  # Very deterministic
+            "max_tokens": 150
+        }
+        
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.post(GROQ_URL, headers=headers, json=payload)
+            
+            if response.status_code == 200:
+                result = response.json()
+                content = result['choices'][0]['message']['content']
+                
+                # Try to extract JSON from response
+                import re
+                json_match = re.search(r'\{.*\}', content, re.DOTALL)
+                if json_match:
+                    classification = json.loads(json_match.group())
+                    logger.info(f"🎯 Message classified as: {classification['category']} (confidence: {classification['confidence']})")
+                    return classification
+    except Exception as e:
+        logger.warning(f"Classification failed, using fallback: {e}")
+    
+    # Fallback: Simple keyword detection
+    text_lower = text.lower()
+    if len(text) < 30 and any(word in text_lower for word in ["hi", "hello", "hey"]):
+        return {"category": "GREETING", "confidence": 0.7, "reasoning": "fallback detection"}
+    elif any(word in text_lower for word in ["error", "issue", "problem", "incident", "down", "slow"]):
+        return {"category": "INCIDENT_REPORT", "confidence": 0.8, "reasoning": "fallback detection"}
+    else:
+        return {"category": "GENERAL_QUESTION", "confidence": 0.5, "reasoning": "fallback detection"}
+
+# ============================================================================
+# IMPROVED PROMPT BUILDERS
+# ============================================================================
+
 def build_messages(prompt: str, conversation_history: List[Dict] = None) -> List[Dict]:
-    """Build messages for Groq API"""
+    """Build messages for Groq API with comprehensive system understanding"""
     messages = [
         {
             "role": "system", 
-            "content": """You are an expert Site Reliability Engineer (SRE) with 10+ years of experience in incident response. 
+            "content": """You are an expert Site Reliability Engineer (SRE) assistant with deep experience in incident response, system architecture, and troubleshooting.
 
-Your expertise includes:
-- Rapid root cause analysis
-- Database performance optimization
-- System resource troubleshooting
-- Network debugging
-- Container orchestration issues
+**YOUR CORE ABILITIES:**
+- Analyze incidents with precision and provide actionable solutions
+- Search through past incident knowledge base to find similar cases
+- Provide step-by-step diagnostic commands with expected outputs
+- Explain complex technical concepts clearly
+- Maintain context across conversations
 
-CRITICAL RULES:
-- NEVER invent or make up past incidents
-- NEVER claim something happened "last quarter" or "previously" unless explicitly provided in the context
-- If asked about similar incidents and none exist in the provided data, clearly state "No similar incidents in the knowledge base"
-- Only reference incidents that are explicitly mentioned in the user's prompt
-- Be honest about what you know vs. what you're inferring
+**YOUR PERSONALITY:**
+- Professional yet approachable - like a senior colleague
+- Direct and practical - no fluff or corporate speak
+- Patient with beginners, challenging with experts
+- Honest about limitations - you don't make up information
 
-Provide specific, actionable advice with actual commands, configurations, and thresholds. 
-Be direct and practical - no generic textbook responses. 
-Think like a senior engineer helping a team member during an outage."""
+**RESPONSE GUIDELINES:**
+
+When user is greeting or chatting casually:
+- Be warm and friendly (1-2 sentences)
+- Briefly mention you help with incidents
+- Ask what they need help with
+
+When user asks about your capabilities:
+- Explain you analyze incidents and find solutions
+- Mention you can search past incidents for patterns
+- Keep it under 100 words
+
+When user reports an incident:
+- Immediately shift to expert mode
+- Provide structured analysis: Assessment → Diagnostics → Actions → Next Steps
+- Use specific commands, thresholds, and values
+- Reference similar past incidents ONLY if they exist in the provided data
+- Be specific about confidence levels (e.g., "80% confident this is...")
+
+When continuing a conversation:
+- Build on what was already discussed
+- Don't repeat previous suggestions
+- Answer the specific question asked
+- Maintain conversational flow
+
+**CRITICAL RULES:**
+- NEVER invent past incidents - only reference ones explicitly provided
+- If no similar incidents exist, say so clearly
+- Be specific with numbers, commands, and thresholds
+- Adjust response length to match the situation (short for greetings, detailed for incidents)
+
+You're here to help, whether that's a quick hello or saving production at 3am."""
         }
     ]
     
@@ -410,9 +508,143 @@ Think like a senior engineer helping a team member during an outage."""
     
     return messages
 
-# ============================================================================
-# PROMPT BUILDERS
-# ============================================================================
+def build_enhanced_prompt(
+    title: str, 
+    description: str, 
+    service: str, 
+    context: Dict[str, Any],
+    user_question: Optional[str] = None,
+    message_classification: Optional[Dict] = None
+) -> str:
+    """Enhanced prompt that adapts to conversation type"""
+    
+    full_text = f"{title} {description}".strip()
+    similar = context["rag_context"]
+    
+    # Use intelligent classification
+    if message_classification and message_classification["category"] in ["GREETING", "CAPABILITY_INQUIRY"]:
+        return f"""The user said: "{full_text}"
+
+This is a casual conversation, not an incident report.
+
+**Classification:** {message_classification['category']}
+**Context:** {message_classification.get('reasoning', 'casual chat')}
+
+Respond naturally and conversationally:
+- If greeting: Greet warmly, briefly mention you help with incidents, ask what they need
+- If asking capabilities: Explain you analyze incidents, search past cases, provide solutions
+- Keep it friendly and brief (2-4 sentences)
+- DON'T launch into incident analysis
+
+Example tone: "Hi! I'm your SRE assistant. I help analyze incidents, find root causes, and suggest fixes based on past experience. What can I help you troubleshoot today?" """
+    
+    # INCIDENT ANALYSIS MODE - Show them what we found!
+    prompt = f"""**INCIDENT ANALYSIS REQUEST**
+
+Service: {service}
+Issue: {title}
+Description: {description}
+"""
+    
+    # IMPORTANT: Show incident matches clearly
+    if similar and len(similar) > 0:
+        prompt += f"\n**🔍 KNOWLEDGE BASE SEARCH RESULTS:**\n"
+        prompt += f"Found {len(similar)} potentially related incident(s) in our database:\n\n"
+        
+        for idx, inc in enumerate(similar[:3], 1):
+            sim_pct = int(inc['similarity_score'] * 100)
+            
+            # Color code by similarity
+            if sim_pct >= 70:
+                confidence = "🟢 HIGH MATCH"
+            elif sim_pct >= 50:
+                confidence = "🟡 MODERATE MATCH"
+            else:
+                confidence = "🔴 LOW MATCH"
+            
+            prompt += f"""{idx}. **Incident {inc['incident_id']}** - {confidence} ({sim_pct}% similar)
+   Title: {inc['title']}
+   Service: {inc['service']}
+   Root Cause: {inc['root_cause']}
+   Resolution: {inc['resolution']}
+   Severity: {inc.get('severity', 'unknown')}
+
+"""
+        
+        best_match = similar[0]
+        best_sim = int(best_match['similarity_score'] * 100)
+        
+        if best_sim >= 70:
+            prompt += f"""**✅ STRONG PATTERN MATCH**
+The best match (Incident {best_match['incident_id']}) has {best_sim}% similarity.
+Start your response by acknowledging: "I found a very similar incident ({best_match['incident_id']}) where..."
+Then explain how the previous solution applies to this case.
+"""
+        elif best_sim >= 50:
+            prompt += f"""**⚠️ POSSIBLE PATTERN**
+The best match has {best_sim}% similarity - not conclusive but worth noting.
+Mention it as: "There's a possibly related incident ({best_match['incident_id']}), though not identical..."
+Then provide your own fresh analysis.
+"""
+        else:
+            prompt += f"""**ℹ️ LIMITED SIMILARITY**
+Found {len(similar)} past incidents, but highest similarity is only {best_sim}%.
+State clearly: "I found some past incidents but none are very similar to this. Let me analyze this as a new pattern."
+"""
+    else:
+        prompt += """
+**🆕 NEW INCIDENT PATTERN**
+No similar incidents found in the knowledge base.
+
+**IMPORTANT:** Start by clearly stating: "This appears to be a new incident pattern - I don't have similar cases to reference. Let me analyze this fresh..."
+"""
+    
+    # Add context
+    keywords = context.get("keywords", [])
+    if keywords:
+        prompt += f"\n**Detected Keywords:** {', '.join(keywords[:5])}"
+    
+    service_info = context.get("service_info", {})
+    if service_info:
+        prompt += f"\n**Service Context:** {service_info.get('common_issues', [])}"
+    
+    prompt += """
+
+**YOUR RESPONSE STRUCTURE:**
+
+**1. Opening (1-2 sentences):**
+- Acknowledge any similar incidents found (or explicitly state none exist)
+- Quick assessment of the situation
+
+**2. Root Cause Analysis (3-4 sentences):**
+- What's likely happening based on symptoms
+- Confidence level (e.g., "75% confident this is...")
+- Why you think this (evidence from description or past incidents)
+
+**3. Diagnostic Commands (3-5 commands):**
+Present as a numbered list with specific guidance:
+```
+1. `command here` - What to check, expected normal values
+2. `another command` - What indicates a problem
+```
+
+**4. Immediate Actions (if critical):**
+One-line fix to stabilize right now (only if urgent)
+
+**5. Next Steps (2-3 sentences):**
+What to investigate after diagnostics
+
+**RESPONSE REQUIREMENTS:**
+- Be conversational but precise
+- Use actual command examples, not placeholders
+- Give specific thresholds and values
+- Length: 200-400 words (adjust for streaming readability)
+- Never fabricate past incidents
+- If uncertain, say so
+
+Remember: The user is watching this stream live during an outage. Be helpful, specific, and quick."""
+    
+    return prompt
 
 def build_conversation_aware_prompt(
     title: str,
@@ -422,10 +654,11 @@ def build_conversation_aware_prompt(
     user_question: str,
     conversation_history: List[Dict]
 ) -> str:
-    """Build prompts that understand conversation context"""
+    """Build prompts for follow-up questions in ongoing conversations"""
     
     similar = context["rag_context"]
     
+    # Track what's been discussed
     already_mentioned = {
         "commands": set(),
         "topics": set(),
@@ -436,190 +669,129 @@ def build_conversation_aware_prompt(
         if msg["role"] == "assistant":
             content_lower = msg["content"].lower()
             
-            if "pg_stat_activity" in content_lower:
-                already_mentioned["commands"].add("pg_stat_activity")
-            if "pg_settings" in content_lower:
-                already_mentioned["commands"].add("pg_settings")
-            if "ps aux" in content_lower:
-                already_mentioned["commands"].add("ps aux")
+            # Extract mentioned commands
+            import re
+            commands = re.findall(r'`([^`]+)`', msg["content"])
+            already_mentioned["commands"].update(commands)
             
+            # Track topics
             if "root cause" in content_lower:
                 already_mentioned["topics"].add("root_cause")
-            if "prevention" in content_lower:
+            if "prevention" in content_lower or "prevent" in content_lower:
                 already_mentioned["topics"].add("prevention")
+            if "monitor" in content_lower:
+                already_mentioned["topics"].add("monitoring")
             
+            # Track incident IDs
             for inc in similar:
                 if inc["incident_id"].lower() in content_lower:
                     already_mentioned["incident_ids"].add(inc["incident_id"])
     
     question_lower = user_question.lower()
     
+    # Detect question type
     asking_about_similar = any(word in question_lower for word in 
-                               ["similar", "past", "previous", "related", "other", "cases", "history"])
+                               ["similar", "past", "previous", "related", "other", "history", "before"])
     
-    asking_without_similar = any(phrase in question_lower for phrase in 
-                                 ["without", "instead of", "other than", "different", "alternative"])
+    asking_for_alternatives = any(phrase in question_lower for phrase in 
+                                 ["without", "instead", "other than", "different", "alternative", "else"])
     
-    # CRITICAL: Handle questions about similar incidents honestly
+    asking_for_prevention = any(word in question_lower for word in
+                               ["prevent", "avoid", "stop", "future", "again"])
+    
+    # Build context-aware prompt
     if asking_about_similar:
         if similar and len(similar) > 0:
-            prompt = f"""The user asked: "{user_question}"
+            prompt = f"""**FOLLOW-UP QUESTION ABOUT SIMILAR INCIDENTS**
 
-**Available Past Incidents in Database:**
+User asked: "{user_question}"
+
+**Available Past Incidents:**
 """
             for idx, inc in enumerate(similar[:3], 1):
                 sim_pct = int(inc['similarity_score'] * 100)
+                already_discussed = "✅ Already discussed" if inc['incident_id'] in already_mentioned['incident_ids'] else "🆕 Not yet mentioned"
+                
                 prompt += f"""
-{idx}. Incident {inc['incident_id']} ({sim_pct}% similarity)
-   - Title: {inc['title']}
-   - Root Cause: {inc['root_cause']}
-   - Resolution: {inc['resolution']}
+{idx}. **{inc['incident_id']}** ({sim_pct}% similar) - {already_discussed}
+   Title: {inc['title']}
+   Root Cause: {inc['root_cause']}
+   Resolution: {inc['resolution']}
 """
             
             prompt += f"""
 
-Answer the user's question about these similar incidents. Be honest about similarity percentages.
-If similarity is low (under 60%), acknowledge they're not very similar.
-Keep response under 150 words."""
+Answer their question about these incidents:
+- Focus on incidents NOT yet discussed if possible
+- Be honest about similarity percentages
+- If asking "how many" or "what happened", give factual answers
+- Keep response under 200 words"""
         else:
-            prompt = f"""The user asked: "{user_question}"
+            prompt = f"""User asked: "{user_question}"
 
-**IMPORTANT:** There are NO similar incidents in the database for this issue.
+**IMPORTANT:** No similar incidents exist in the database.
 
-Be honest and say: "I don't have any similar incidents in the knowledge base yet. This appears to be the first time we're seeing this pattern."
-
-Then offer to help analyze the current incident instead. Keep under 100 words."""
+Be honest: "I don't have any similar incidents in the knowledge base for this pattern yet."
+Then offer to help with current incident analysis instead. (Under 100 words)"""
     
-    elif asking_without_similar and similar:
-        prompt = f"""User asked: "{user_question}"
+    elif asking_for_prevention:
+        prompt = f"""**PREVENTION STRATEGIES REQUEST**
 
-They want a DIFFERENT approach than using similar incidents.
+Current incident: {title}
+User asked: "{user_question}"
 
-**Previous suggestions to AVOID:**
-{', '.join(already_mentioned['commands']) if already_mentioned['commands'] else 'None yet'}
+**Already discussed:**
+Topics covered: {', '.join(already_mentioned['topics']) if already_mentioned['topics'] else 'Initial analysis'}
 
-Provide completely different troubleshooting:
-1. Alternative diagnostic approach
-2. Different root cause hypothesis  
-3. Specific actions not mentioned before
+Provide 3-5 specific prevention strategies:
+1. Monitoring/alerting improvements (specific metrics and thresholds)
+2. Configuration changes (actual settings)
+3. Process improvements (specific practices)
 
-Be specific with commands. Under 150 words."""
+Focus on actionable, implementable steps. Under 250 words."""
+    
+    elif asking_for_alternatives:
+        prompt = f"""**ALTERNATIVE APPROACH REQUEST**
+
+User wants different solutions than what was discussed.
+
+**Already suggested:**
+Commands: {', '.join(list(already_mentioned['commands'])[:5]) if already_mentioned['commands'] else 'none yet'}
+
+Provide COMPLETELY DIFFERENT approaches:
+- Different diagnostic tools/commands
+- Alternative hypotheses for root cause
+- Different resolution strategies
+
+Be specific and practical. Under 200 words."""
     
     else:
-        # General follow-up question
-        prompt = f"""Continuing conversation about: {title}
+        # General follow-up
+        prompt = f"""**FOLLOW-UP QUESTION**
 
-**Recent discussion:**
+Ongoing incident: {title}
+
+**Recent conversation context:**
 """
-        for msg in conversation_history[-3:]:
-            role = "User" if msg["role"] == "user" else "You previously said"
-            prompt += f"{role}: {msg['content'][:120]}...\n"
+        for msg in conversation_history[-2:]:
+            role = "User" if msg["role"] == "user" else "You"
+            snippet = msg['content'][:150] + "..." if len(msg['content']) > 150 else msg['content']
+            prompt += f"{role}: {snippet}\n\n"
         
         prompt += f"""
-
 User's new question: "{user_question}"
 
-**Already discussed (don't repeat):**
-- Commands: {', '.join(already_mentioned['commands']) if already_mentioned['commands'] else 'none'}
-- Topics: {', '.join(already_mentioned['topics']) if already_mentioned['topics'] else 'none'}
+**What we've covered:**
+- Commands mentioned: {', '.join(list(already_mentioned['commands'])[:3])}
+- Topics: {', '.join(already_mentioned['topics'])}
 
-Provide a NEW, specific answer. Reference previous discussion naturally. Add practical value.
-Under 150 words."""
-    
-    return prompt
+Answer their specific question:
+- Build on previous discussion naturally
+- Don't repeat what was already said
+- Provide new information or clarification
+- Be conversational and helpful
 
-def build_enhanced_prompt(
-    title: str, 
-    description: str, 
-    service: str, 
-    context: Dict[str, Any],
-    user_question: Optional[str] = None
-) -> str:
-    """Enhanced prompt for intelligent incident analysis"""
-    
-    similar = context["rag_context"]
-    service_info = context.get("service_info", {})
-    keywords = context.get("keywords", [])
-    
-    prompt = f"""You are a senior SRE engineer analyzing an active incident. Be direct, specific, and helpful.
-
-**Incident Details:**
-Service: {service}
-Issue: {title}
-Description: {description}
-"""
-    
-    # Handle similar incidents honestly
-    if similar and len(similar) > 0:
-        best = similar[0]
-        sim_pct = int(best['similarity_score'] * 100)
-        
-        if sim_pct >= 70:
-            prompt += f"""
-**Past Incident Found (High Confidence):**
-We have incident {best['incident_id']} with {sim_pct}% similarity:
-- Problem: {best['title']}
-- Root Cause: {best['root_cause']}
-- Resolution: {best['resolution']}
-
-Use this knowledge to guide your analysis. Start by acknowledging this similarity.
-"""
-        elif sim_pct >= 50:
-            prompt += f"""
-**Possibly Related Incident:**
-Incident {best['incident_id']} has {sim_pct}% similarity, but it's not a strong match.
-Root cause was: {best['root_cause']}
-Mention this briefly as "possibly related" but don't assume it's the same issue.
-"""
-        else:
-            prompt += f"""
-**Low Similarity Incidents Found:**
-Found {len(similar)} past incidents, but highest similarity is only {sim_pct}%.
-Treat this as a NEW incident pattern.
-"""
-    else:
-        prompt += """
-**No Similar Incidents in Database:**
-This is a new incident pattern - no similar cases found in knowledge base.
-Start by saying: "I don't have similar incidents to reference, so let's analyze this fresh."
-"""
-    
-    # Add technical context
-    if keywords:
-        prompt += f"\n**Detected Keywords:** {', '.join(keywords[:5])}"
-    
-    prompt += """
-
-**Your Analysis Should Include:**
-
-**1. Quick Assessment (2-3 sentences):**
-- What's actually happening based on the symptoms
-- Most likely cause with confidence level (e.g., "80% confident this is...")
-- Immediate risk/impact
-
-**2. Diagnostic Commands (prioritized, with context):**
-Give 3-4 commands in this format:
-```
-1. `command here` - Check for X, look for values over Y
-2. `command here` - Shows Z, normal range is A-B
-```
-Be specific about what values indicate a problem.
-
-**3. Immediate Action (if critical):**
-One command to mitigate right now, only if truly urgent.
-
-**4. Next Steps (1-2 sentences):**
-What to investigate based on diagnostic results.
-
-**Critical Rules:**
-- NEVER make up past incidents if none exist
-- NEVER claim something happened "last quarter" unless it's in the database
-- If no similar incidents exist, say so clearly
-- Be specific with numbers, thresholds, commands
-- Avoid phrases like "typically," "usually," "often" - be definitive
-
-Keep under 250 words total. Be conversational but precise.
-"""
+Keep under 200 words."""
     
     return prompt
 
@@ -635,17 +807,24 @@ async def home():
         
         return {
             "status": "🚀 Incident AI - Groq API Edition",
-            "version": "2.0 - No Ollama Download Needed!",
+            "version": "2.0 - Intelligent Conversation Mode",
             "model": MODEL_NAME,
             "api_provider": "Groq (FREE)",
             "services": {
                 "groq_api": "✅ ready" if GROQ_API_KEY else "❌ API key not set",
-                "rag": "✅ enabled" if rag else "❌ disabled"
+                "rag": "✅ enabled" if rag else "❌ disabled",
+                "intelligent_classification": "✅ enabled"
             },
             "knowledge_base": {
                 "incidents": incident_count,
                 "auto_learning": True
             },
+            "features": [
+                "🤖 Dynamic message classification (no hardcoded greetings)",
+                "🔍 Smart incident matching with confidence scores",
+                "💬 Context-aware conversations",
+                "📊 Detailed similarity explanations"
+            ],
             "endpoints": {
                 "analysis": ["/analyze", "/analyze/stream", "/analyze/agentic-stream"],
                 "incidents": ["/incidents/add", "/incidents/search", "/incidents/list"],
@@ -740,7 +919,11 @@ async def analyze_basic(incident: dict):
     analytics_data["total_analyses"] += 1
     analytics_data["incidents_by_service"][service] += 1
     
-    # Search similar incidents - FIXED: Use async
+    # Classify message intent
+    full_text = f"{title} {description}"
+    classification = await classify_message_intent(full_text)
+    
+    # Search similar incidents
     similar_incidents = []
     if rag:
         try:
@@ -755,7 +938,7 @@ async def analyze_basic(incident: dict):
             logger.error(f"RAG search failed: {e}")
     
     context = await context_gatherer.gather(title, description, service, similar_incidents)
-    prompt = build_enhanced_prompt(title, description, service, context)
+    prompt = build_enhanced_prompt(title, description, service, context, message_classification=classification)
     messages = build_messages(prompt)
     
     try:
@@ -781,6 +964,7 @@ async def analyze_basic(incident: dict):
                     "service": service,
                     "analysis": analysis_text,
                     "quality_score": quality_report["quality"],
+                    "message_classification": classification,
                     "similar_incidents": [
                         {
                             "id": inc["incident_id"],
@@ -805,7 +989,7 @@ async def analyze_basic(incident: dict):
 
 @app.post("/analyze/stream")
 async def analyze_stream(incident: dict):
-    """Streaming analysis"""
+    """Streaming analysis with intelligent classification"""
     title = incident.get('title', '')
     description = incident.get('description', '')
     service = incident.get('service', 'unknown')
@@ -820,30 +1004,55 @@ async def analyze_stream(incident: dict):
             start_time = time.time()
             analytics_data["total_analyses"] += 1
             
-            # Search similar - FIXED: Use async
+            # Classify message intent
+            full_text = f"{title} {description}"
+            yield f"data: {json.dumps({'type': 'status', 'message': 'Classifying message intent...'})}\n\n"
+            
+            classification = await classify_message_intent(full_text)
+            
+            yield f"data: {json.dumps({'type': 'classification', 'category': classification['category'], 'confidence': classification['confidence']})}\n\n"
+            await asyncio.sleep(0.1)
+            
+            # Search similar
+            yield f"data: {json.dumps({'type': 'status', 'message': 'Searching knowledge base...'})}\n\n"
+            
             similar_incidents = []
-            if rag:
+            if rag and classification['category'] in ['INCIDENT_REPORT', 'FOLLOW_UP']:
                 try:
                     similar_incidents = await rag.search_similar_async(
-                        query=f"{title}. {description}",
+                        query=full_text,
                         service=service,
                         limit=3
                     )
+                    if similar_incidents:
+                        analytics_data["rag_matches"] += 1
                 except Exception as e:
                     logger.error(f"RAG search: {e}")
             
             context = await context_gatherer.gather(title, description, service, similar_incidents)
-            prompt = build_enhanced_prompt(title, description, service, context)
+            prompt = build_enhanced_prompt(title, description, service, context, message_classification=classification)
             messages = build_messages(prompt)
             
-            # Send metadata
+            # Send metadata with match details
             metadata = {
                 "type": "metadata",
                 "incident": title,
                 "service": service,
-                "similar_count": len(similar_incidents)
+                "classification": classification['category'],
+                "similar_incidents_found": len(similar_incidents),
+                "matches": [
+                    {
+                        "id": inc["incident_id"],
+                        "similarity_pct": round(inc["similarity_score"] * 100),
+                        "title": inc["title"][:50] + "..." if len(inc["title"]) > 50 else inc["title"],
+                        "confidence": "high" if inc["similarity_score"] >= 0.7 else "medium" if inc["similarity_score"] >= 0.5 else "low"
+                    }
+                    for inc in similar_incidents[:3]
+                ]
             }
             yield f"data: {json.dumps(metadata)}\n\n"
+            
+            yield f"data: {json.dumps({'type': 'status', 'message': 'Generating analysis...'})}\n\n"
             
             # Call Groq API with streaming
             headers, payload = await call_groq_api(messages, stream=True)
@@ -877,7 +1086,8 @@ async def analyze_stream(incident: dict):
             completion = {
                 "type": "done",
                 "response_time": round(elapsed, 2),
-                "quality": quality_report["quality"]
+                "quality": quality_report["quality"],
+                "word_count": len(full_response.split())
             }
             yield f"data: {json.dumps(completion)}\n\n"
         
@@ -897,7 +1107,7 @@ async def analyze_stream(incident: dict):
 
 @app.post("/analyze/agentic-stream")
 async def analyze_agentic_stream(incident: dict):
-    """Conversation-aware streaming - FIXES REPETITION"""
+    """Conversation-aware streaming - Intelligent and context-aware"""
     title = incident.get('title', '')
     description = incident.get('description', '')
     service = incident.get('service', 'unknown')
@@ -929,15 +1139,23 @@ async def analyze_agentic_stream(incident: dict):
             if user_question:
                 conversation_manager.add_message(incident_id, "user", user_question)
             
-            yield f"data: {json.dumps({'type': 'status', 'message': 'Analyzing context...'})}\n\n"
+            # Classify intent
+            full_text = f"{title} {description} {user_question}"
+            yield f"data: {json.dumps({'type': 'status', 'message': '🤖 Understanding your message...'})}\n\n"
+            
+            classification = await classify_message_intent(full_text)
+            
+            yield f"data: {json.dumps({'type': 'classification', 'category': classification['category']})}\n\n"
             await asyncio.sleep(0.1)
             
-            # Search similar - FIXED: Use async
+            yield f"data: {json.dumps({'type': 'status', 'message': '🔍 Searching knowledge base...'})}\n\n"
+            
+            # Search similar
             similar_incidents = []
-            if rag:
+            if rag and classification['category'] in ['INCIDENT_REPORT', 'FOLLOW_UP']:
                 try:
                     similar_incidents = await rag.search_similar_async(
-                        query=f"{title}. {description}",
+                        query=full_text,
                         service=service,
                         limit=3
                     )
@@ -948,35 +1166,37 @@ async def analyze_agentic_stream(incident: dict):
             
             context = await context_gatherer.gather(title, description, service, similar_incidents)
             
-            # Build conversation-aware prompt
+            # Build appropriate prompt
             if user_question and conversation_history:
                 prompt = build_conversation_aware_prompt(
                     title, description, service, context,
                     user_question, conversation_history
                 )
             else:
-                prompt = build_enhanced_prompt(title, description, service, context, user_question)
+                prompt = build_enhanced_prompt(title, description, service, context, user_question, classification)
             
             messages = build_messages(prompt, conversation_history)
             
-            # Send metadata
+            # Send rich metadata
             metadata = {
                 "type": "metadata",
                 "incident_title": title,
                 "service": service,
-                "conversation_length": len(conversation_history),
-                "similar_past_incidents": [
-                    {
-                        "id": inc["incident_id"],
-                        "similarity": round(inc["similarity_score"], 2),
-                        "title": inc["title"]
-                    }
-                    for inc in similar_incidents[:2]
-                ]
+                "conversation_turn": len(conversation_history) + 1,
+                "intent": classification['category'],
+                "knowledge_base": {
+                    "total_incidents": rag.count_incidents() if rag else 0,
+                    "matches_found": len(similar_incidents),
+                    "best_match": {
+                        "id": similar_incidents[0]["incident_id"],
+                        "similarity": round(similar_incidents[0]["similarity_score"] * 100),
+                        "confidence": "🟢 HIGH" if similar_incidents[0]["similarity_score"] >= 0.7 else "🟡 MODERATE" if similar_incidents[0]["similarity_score"] >= 0.5 else "🔴 LOW"
+                    } if similar_incidents else None
+                }
             }
             yield f"data: {json.dumps(metadata)}\n\n"
             
-            yield f"data: {json.dumps({'type': 'status', 'message': 'Generating response...'})}\n\n"
+            yield f"data: {json.dumps({'type': 'status', 'message': '💭 Analyzing and generating response...'})}\n\n"
             
             # Call Groq API with streaming
             headers, payload = await call_groq_api(messages, stream=True)
@@ -1015,7 +1235,8 @@ async def analyze_agentic_stream(incident: dict):
                 "type": "done",
                 "response_time": round(elapsed, 2),
                 "quality_score": quality_report["quality"],
-                "conversation_messages": len(conversation_history) + 2
+                "conversation_messages": len(conversation_history) + 2,
+                "word_count": len(full_response.split())
             }
             yield f"data: {json.dumps(completion)}\n\n"
         
@@ -1066,7 +1287,7 @@ async def seed_incidents():
         raise HTTPException(status_code=503, detail="RAG not available")
     
     try:
-        await seed_example_data_async(rag)  # FIXED: Use async version
+        await seed_example_data_async(rag)
         return {
             "message": "✅ Incidents seeded successfully",
             "total": rag.count_incidents()
@@ -1077,20 +1298,13 @@ async def seed_incidents():
 
 @app.post("/incidents/add")
 async def add_incident(incident: IncidentAdd):
-    """
-    Add a resolved incident to the AI knowledge base for future reference.
-    
-    This endpoint stores incident details including root cause and resolution,
-    enabling the AI to provide better recommendations for similar future incidents.
-    """
+    """Add a resolved incident to the AI knowledge base"""
     if not rag:
         raise HTTPException(status_code=503, detail="RAG not available")
     
     try:
-        # Convert Pydantic model to dict
         incident_dict = incident.model_dump()
         
-        # FIXED: Use async version
         doc_id = await rag.add_incident_async(
             incident_id=incident_dict['incident_id'],
             title=incident_dict['title'],
@@ -1117,7 +1331,6 @@ async def search_incidents(query: str, service: Optional[str] = None, limit: int
         raise HTTPException(status_code=503, detail="RAG not available")
     
     try:
-        # FIXED: Use async version
         results = await rag.search_similar_async(query=query, service=service, limit=limit)
         return {"query": query, "results": results, "count": len(results)}
     except Exception as e:
@@ -1179,7 +1392,7 @@ async def export_all_analytics():
         "model": {
             "name": MODEL_NAME,
             "provider": "Groq",
-            "features": ["RAG", "Streaming", "Adaptive Config", "Anti-Repetition"]
+            "features": ["RAG", "Streaming", "Adaptive Config", "Anti-Repetition", "Intelligent Classification"]
         }
     }
 
@@ -1197,6 +1410,7 @@ async def startup_event():
     logger.info(f"🔑 Groq API Key: {'✅ Set' if GROQ_API_KEY else '❌ Not set'}")
     logger.info(f"🔍 RAG: {'✅ Enabled' if rag else '❌ Disabled'}")
     logger.info(f"📊 Incident Count: {rag.count_incidents() if rag else 0}")
+    logger.info(f"🧠 Intelligent Classification: ✅ Enabled")
     logger.info(f"🌐 Port: {os.getenv('PORT', '8000')}")
     logger.info("="*70)
 
@@ -1211,6 +1425,7 @@ if __name__ == "__main__":
     print(f"🔑 API Key: {'✅ Set' if GROQ_API_KEY else '❌ Not set'}")
     print(f"🔍 RAG: {'✅ Enabled' if rag else '❌ Disabled'}")
     print(f"💬 Conversation Tracking: ✅ Enabled")
+    print(f"🧠 Intelligent Classification: ✅ No hardcoded greetings!")
     
     if not GROQ_API_KEY:
         print("\n⚠️  WARNING: GROQ_API_KEY not set!")
@@ -1219,10 +1434,16 @@ if __name__ == "__main__":
     
     print("\n📍 Main Endpoints:")
     print("  • POST /analyze                - Basic analysis")
-    print("  • POST /analyze/stream         - Streaming")
-    print("  • POST /analyze/agentic-stream - Conversation-aware")
+    print("  • POST /analyze/stream         - Streaming with intent detection")
+    print("  • POST /analyze/agentic-stream - Conversation-aware with context")
     print("  • POST /incidents/seed         - Add examples")
     print("  • GET  /api/analytics/overview - Analytics")
+    
+    print("\n✨ New Features:")
+    print("  • 🎯 Dynamic message classification (no hardcoded lists!)")
+    print("  • 🔍 Detailed incident match feedback with confidence scores")
+    print("  • 📊 Similarity percentages and match quality indicators")
+    print("  • 💬 Context-aware follow-up handling")
     
     print("\n" + "="*70 + "\n")
     
