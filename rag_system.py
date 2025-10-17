@@ -19,8 +19,8 @@ logger = logging.getLogger(__name__)
 # Hugging Face API configuration
 HF_API_KEY = os.getenv("HUGGINGFACE_API_KEY", "")
 EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
-# Use feature-extraction pipeline explicitly
-HF_API_URL = f"https://api-inference.huggingface.co/pipeline/feature-extraction/{EMBEDDING_MODEL}"
+# Correct endpoint for Hugging Face Inference API
+HF_API_URL = f"https://api-inference.huggingface.co/models/{EMBEDDING_MODEL}"
 
 class IncidentRAG:
     """
@@ -81,41 +81,48 @@ class IncidentRAG:
             raise Exception("HUGGINGFACE_API_KEY not set")
 
         headers = {
-            "Authorization": f"Bearer {HF_API_KEY}",
-            "Content-Type": "application/json"
+            "Authorization": f"Bearer {HF_API_KEY}"
         }
 
-        # FIXED: Feature extraction pipeline expects this format
+        # For sentence-transformers models, send as JSON with proper format
         payload = {
             "inputs": text,
             "options": {
-                "wait_for_model": True,
-                "use_cache": True
+                "wait_for_model": True
             }
         }
 
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=60.0) as client:
             response = await client.post(HF_API_URL, headers=headers, json=payload)
             
             if response.status_code == 200:
                 result = response.json()
-                # Feature extraction returns nested arrays: [[embedding]]
+                logger.info(f"✅ Got embedding, type: {type(result)}, length: {len(result) if isinstance(result, list) else 'N/A'}")
+                
+                # Handle different response formats
                 if isinstance(result, list):
-                    if len(result) > 0 and isinstance(result[0], list):
-                        # Handle [[[embedding]]] or [[embedding]] format
-                        embedding = result[0]
-                        if isinstance(embedding, list) and len(embedding) > 0 and isinstance(embedding[0], list):
-                            return embedding[0]  # Triple nested
-                        return embedding  # Double nested
-                    return result  # Already flat
+                    # Could be [embedding] or [[embedding]]
+                    if len(result) > 0:
+                        first = result[0]
+                        if isinstance(first, list):
+                            # [[embedding]] format
+                            logger.info(f"📊 Embedding dimension: {len(first)}")
+                            return first
+                        elif isinstance(first, (int, float)):
+                            # [embedding] format (flat array)
+                            logger.info(f"📊 Embedding dimension: {len(result)}")
+                            return result
                 return result
+                
             elif response.status_code == 503:
-                logger.info("⏳ Model loading, retrying in 5 seconds...")
-                await asyncio.sleep(5)
+                logger.info("⏳ Model loading, retrying in 10 seconds...")
+                await asyncio.sleep(10)
                 return await self.get_embedding(text)
             else:
                 error_text = response.text
-                logger.error(f"Hugging Face API error: {response.status_code} - {error_text}")
+                logger.error(f"❌ Hugging Face API error: {response.status_code} - {error_text}")
+                logger.error(f"Request URL: {HF_API_URL}")
+                logger.error(f"Request payload: {payload}")
                 raise Exception(f"Hugging Face API error: {response.status_code} - {error_text}")
 
     async def add_incident_async(self, incident_id: str, title: str, description: str,
