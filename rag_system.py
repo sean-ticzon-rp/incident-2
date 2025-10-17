@@ -9,7 +9,7 @@ import logging
 import asyncio
 import httpx
 from qdrant_client import QdrantClient
-from qdrant_client.models import Distance, VectorParams, PointStruct, Filter, FieldCondition, MatchValue
+from qdrant_client.models import Distance, VectorParams, PointStruct, Filter, FieldCondition, MatchValue, PayloadSchemaType
 from qdrant_client.http.exceptions import UnexpectedResponse
 
 logging.basicConfig(level=logging.INFO)
@@ -51,9 +51,29 @@ class IncidentRAG:
             # Try to get the collection
             collection_info = self.client.get_collection(self.collection_name)
             logger.info(f"✅ Collection '{self.collection_name}' already exists ({collection_info.points_count} incidents)")
+            
+            # Check if payload indexes exist, create if missing
+            try:
+                from qdrant_client.models import PayloadSchemaType, PayloadIndexParams
+                
+                # Create index for 'service' field if it doesn't exist
+                self.client.create_payload_index(
+                    collection_name=self.collection_name,
+                    field_name="service",
+                    field_schema=PayloadSchemaType.KEYWORD
+                )
+                logger.info("✅ Created payload index for 'service' field")
+            except Exception as index_error:
+                if "already exists" in str(index_error).lower():
+                    logger.info("✅ Payload indexes already exist")
+                else:
+                    logger.warning(f"⚠️ Could not create payload index: {index_error}")
+                    
         except Exception as get_error:
             # Collection doesn't exist, try to create it
             try:
+                from qdrant_client.models import PayloadSchemaType
+                
                 self.client.create_collection(
                     collection_name=self.collection_name,
                     vectors_config=VectorParams(
@@ -62,6 +82,15 @@ class IncidentRAG:
                     )
                 )
                 logger.info(f"✅ Created new collection '{self.collection_name}'")
+                
+                # Create payload index for filtering by service
+                self.client.create_payload_index(
+                    collection_name=self.collection_name,
+                    field_name="service",
+                    field_schema=PayloadSchemaType.KEYWORD
+                )
+                logger.info("✅ Created payload index for 'service' field")
+                
             except UnexpectedResponse as create_error:
                 if "already exists" in str(create_error).lower():
                     logger.info(f"✅ Collection '{self.collection_name}' already exists (race condition handled)")
