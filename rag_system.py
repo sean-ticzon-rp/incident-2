@@ -19,6 +19,7 @@ logger = logging.getLogger(__name__)
 # Hugging Face API configuration
 HF_API_KEY = os.getenv("HUGGINGFACE_API_KEY", "")
 EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
+# Use feature-extraction task endpoint
 HF_API_URL = f"https://api-inference.huggingface.co/models/{EMBEDDING_MODEL}"
 
 class IncidentRAG:
@@ -84,25 +85,31 @@ class IncidentRAG:
             "Content-Type": "application/json"
         }
 
+        # FIXED: Hugging Face expects just the text string or array of strings
         payload = {
-            "inputs": text,
-            "options": {"wait_for_model": True}
+            "inputs": text
         }
 
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.post(HF_API_URL, headers=headers, json=payload)
+            
             if response.status_code == 200:
                 result = response.json()
-                # Flatten nested array
-                if isinstance(result, list) and len(result) > 0:
-                    return result[0] if isinstance(result[0], list) else result
+                # The result should be a list (embedding vector)
+                if isinstance(result, list):
+                    # Handle both [[vector]] and [vector] formats
+                    if len(result) > 0 and isinstance(result[0], list):
+                        return result[0]  # Nested array, return first element
+                    return result  # Already flat
                 return result
             elif response.status_code == 503:
-                logger.info("Model loading, retrying...")
-                await asyncio.sleep(2)
+                logger.info("⏳ Model loading, retrying in 3 seconds...")
+                await asyncio.sleep(3)
                 return await self.get_embedding(text)
             else:
-                raise Exception(f"Hugging Face API error: {response.status_code} - {response.text}")
+                error_text = response.text
+                logger.error(f"Hugging Face API error: {response.status_code} - {error_text}")
+                raise Exception(f"Hugging Face API error: {response.status_code} - {error_text}")
 
     async def add_incident_async(self, incident_id: str, title: str, description: str,
                                  service: str, root_cause: str = "", resolution: str = "",
