@@ -386,6 +386,13 @@ Your expertise includes:
 - Network debugging
 - Container orchestration issues
 
+CRITICAL RULES:
+- NEVER invent or make up past incidents
+- NEVER claim something happened "last quarter" or "previously" unless explicitly provided in the context
+- If asked about similar incidents and none exist in the provided data, clearly state "No similar incidents in the knowledge base"
+- Only reference incidents that are explicitly mentioned in the user's prompt
+- Be honest about what you know vs. what you're inferring
+
 Provide specific, actionable advice with actual commands, configurations, and thresholds. 
 Be direct and practical - no generic textbook responses. 
 Think like a senior engineer helping a team member during an outage."""
@@ -534,69 +541,84 @@ def build_enhanced_prompt(
     service_info = context.get("service_info", {})
     keywords = context.get("keywords", [])
     
-    # Build a natural, intelligent prompt
-    prompt = f"""You are an expert SRE helping analyze an incident. Be specific, actionable, and conversational.
+    prompt = f"""You are a senior SRE engineer analyzing an active incident. Be direct, specific, and helpful.
 
-**Current Incident:**
-- Service: {service}
-- Issue: {title}
-- Details: {description}
+**Incident Details:**
+Service: {service}
+Issue: {title}
+Description: {description}
 """
     
-    # Add context about similar incidents naturally
-    if similar:
+    # Handle similar incidents honestly
+    if similar and len(similar) > 0:
         best = similar[0]
         sim_pct = int(best['similarity_score'] * 100)
         
         if sim_pct >= 70:
             prompt += f"""
-**Relevant Past Experience:**
-We've seen something similar before (Incident {best['incident_id']}, {sim_pct}% match):
-- What happened: {best['title']}
-- Root cause was: {best['root_cause']}
-- We fixed it by: {best['resolution']}
+**Past Incident Found (High Confidence):**
+We have incident {best['incident_id']} with {sim_pct}% similarity:
+- Problem: {best['title']}
+- Root Cause: {best['root_cause']}
+- Resolution: {best['resolution']}
 
-This knowledge should guide your analysis, but adapt recommendations based on the current situation.
+Use this knowledge to guide your analysis. Start by acknowledging this similarity.
 """
         elif sim_pct >= 50:
             prompt += f"""
-**Possibly Related:**
-Found incident {best['incident_id']} ({sim_pct}% similar) where the root cause was {best['root_cause']}.
-Consider if this pattern applies here.
+**Possibly Related Incident:**
+Incident {best['incident_id']} has {sim_pct}% similarity, but it's not a strong match.
+Root cause was: {best['root_cause']}
+Mention this briefly as "possibly related" but don't assume it's the same issue.
+"""
+        else:
+            prompt += f"""
+**Low Similarity Incidents Found:**
+Found {len(similar)} past incidents, but highest similarity is only {sim_pct}%.
+Treat this as a NEW incident pattern.
+"""
+    else:
+        prompt += """
+**No Similar Incidents in Database:**
+This is a new incident pattern - no similar cases found in knowledge base.
+Start by saying: "I don't have similar incidents to reference, so let's analyze this fresh."
 """
     
-    # Add service context
-    if service_info.get("common_issues"):
-        prompt += f"\n**Service Context:** {service} typically experiences: {', '.join(service_info['common_issues'][:3])}"
-    
+    # Add technical context
     if keywords:
-        prompt += f"\n**Detected Indicators:** {', '.join(keywords[:5])}"
+        prompt += f"\n**Detected Keywords:** {', '.join(keywords[:5])}"
     
-    # The key improvement - clear, actionable structure
     prompt += """
 
-**Provide your analysis:**
+**Your Analysis Should Include:**
 
-1. **Diagnosis** (2-3 sentences max):
-   - What's likely happening and why
-   - Specific hypothesis based on the symptoms
-   - Impact assessment
+**1. Quick Assessment (2-3 sentences):**
+- What's actually happening based on the symptoms
+- Most likely cause with confidence level (e.g., "80% confident this is...")
+- Immediate risk/impact
 
-2. **Immediate Actions** (prioritized, specific commands):
-   - List 3-4 diagnostic commands with brief explanation of what each reveals
-   - Include actual command syntax (e.g., `ps aux --sort=-%mem | head -10`)
-   - Mention what values/outputs to look for
+**2. Diagnostic Commands (prioritized, with context):**
+Give 3-4 commands in this format:
+```
+1. `command here` - Check for X, look for values over Y
+2. `command here` - Shows Z, normal range is A-B
+```
+Be specific about what values indicate a problem.
 
-3. **Quick Fix** (if applicable):
-   - One immediate action to mitigate the issue
-   - Example: "If memory > 90%, restart service X with: `sudo systemctl restart X`"
+**3. Immediate Action (if critical):**
+One command to mitigate right now, only if truly urgent.
 
-4. **Prevention** (1-2 sentences):
-   - Specific configuration or monitoring to prevent recurrence
-   - Include actual settings/thresholds
+**4. Next Steps (1-2 sentences):**
+What to investigate based on diagnostic results.
 
-Be direct, practical, and avoid generic advice. Speak like an experienced engineer helping a colleague, not a textbook.
-Keep total response under 250 words.
+**Critical Rules:**
+- NEVER make up past incidents if none exist
+- NEVER claim something happened "last quarter" unless it's in the database
+- If no similar incidents exist, say so clearly
+- Be specific with numbers, thresholds, commands
+- Avoid phrases like "typically," "usually," "often" - be definitive
+
+Keep under 250 words total. Be conversational but precise.
 """
     
     return prompt
