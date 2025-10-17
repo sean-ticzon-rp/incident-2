@@ -182,11 +182,11 @@ class AdaptiveLLMConfig:
     
     def __init__(self):
         self.config = {
-            "temperature": 0.7,
-            "top_p": 0.9,
-            "max_tokens": 600,
-            "frequency_penalty": 0.3,
-            "presence_penalty": 0.2
+            "temperature": 0.5,  # Lower for more focused, less random responses
+            "top_p": 0.85,  # More deterministic
+            "max_tokens": 800,  # More room for detailed answers
+            "frequency_penalty": 0.4,  # Stronger penalty for repetition
+            "presence_penalty": 0.3  # Encourage diverse topics
         }
         self.response_history = deque(maxlen=20)
         self.total_adjustments = 0
@@ -375,7 +375,21 @@ async def call_groq_api(messages: List[Dict], stream: bool = False):
 def build_messages(prompt: str, conversation_history: List[Dict] = None) -> List[Dict]:
     """Build messages for Groq API"""
     messages = [
-        {"role": "system", "content": "You are an expert SRE assistant helping analyze incidents."}
+        {
+            "role": "system", 
+            "content": """You are an expert Site Reliability Engineer (SRE) with 10+ years of experience in incident response. 
+
+Your expertise includes:
+- Rapid root cause analysis
+- Database performance optimization
+- System resource troubleshooting
+- Network debugging
+- Container orchestration issues
+
+Provide specific, actionable advice with actual commands, configurations, and thresholds. 
+Be direct and practical - no generic textbook responses. 
+Think like a senior engineer helping a team member during an outage."""
+        }
     ]
     
     if conversation_history:
@@ -505,63 +519,76 @@ def build_enhanced_prompt(
     context: Dict[str, Any],
     user_question: Optional[str] = None
 ) -> str:
-    """Enhanced prompt for first message"""
+    """Enhanced prompt for intelligent incident analysis"""
     
     similar = context["rag_context"]
+    service_info = context.get("service_info", {})
+    keywords = context.get("keywords", [])
     
-    prompt = f"""You're an expert SRE assistant analyzing this incident.
+    # Build a natural, intelligent prompt
+    prompt = f"""You are an expert SRE helping analyze an incident. Be specific, actionable, and conversational.
 
-**Incident:**
-Service: {service}
-Title: {title}
-Description: {description}
-
+**Current Incident:**
+- Service: {service}
+- Issue: {title}
+- Details: {description}
 """
     
+    # Add context about similar incidents naturally
     if similar:
         best = similar[0]
         sim_pct = int(best['similarity_score'] * 100)
         
-        if sim_pct >= 75:
-            prompt += f"""**Found incident {best['incident_id']} ({sim_pct}% match):**
-Cause: {best['root_cause']}
-Fix: {best['resolution']}
+        if sim_pct >= 70:
+            prompt += f"""
+**Relevant Past Experience:**
+We've seen something similar before (Incident {best['incident_id']}, {sim_pct}% match):
+- What happened: {best['title']}
+- Root cause was: {best['root_cause']}
+- We fixed it by: {best['resolution']}
 
-Start with: "This looks very similar to incident {best['incident_id']} we had before."
+This knowledge should guide your analysis, but adapt recommendations based on the current situation.
 """
-        elif sim_pct >= 60:
-            prompt += f"""**Found incident {best['incident_id']} ({sim_pct}% similar):**
-Cause: {best['root_cause']}
-Fix: {best['resolution']}
-
-Start with: "I found a related incident ({best['incident_id']})."
-"""
-        else:
-            prompt += f"""**Past incidents only {sim_pct}% similar.**
-
-Start with: "I found some loosely related incidents, but this looks like a new pattern."
-"""
-    else:
-        prompt += """**No similar past incidents.**
-
-Start with: "This appears to be a new type of incident."
+        elif sim_pct >= 50:
+            prompt += f"""
+**Possibly Related:**
+Found incident {best['incident_id']} ({sim_pct}% similar) where the root cause was {best['root_cause']}.
+Consider if this pattern applies here.
 """
     
-    service_info = context.get("service_info", {})
+    # Add service context
     if service_info.get("common_issues"):
-        prompt += f"\nNote: {service} often has {', '.join(service_info['common_issues'][:2])}.\n"
+        prompt += f"\n**Service Context:** {service} typically experiences: {', '.join(service_info['common_issues'][:3])}"
     
-    keywords = context.get("keywords", [])
     if keywords:
-        prompt += f"Detected: {', '.join(keywords[:4])}\n"
+        prompt += f"\n**Detected Indicators:** {', '.join(keywords[:5])}"
     
+    # The key improvement - clear, actionable structure
     prompt += """
-Give:
-1. Quick diagnosis (2 sentences)
-2. Immediate steps (3-4 specific commands)
-3. Prevention tip (1 sentence)
 
-Conversational style. Under 200 words."""
+**Provide your analysis:**
+
+1. **Diagnosis** (2-3 sentences max):
+   - What's likely happening and why
+   - Specific hypothesis based on the symptoms
+   - Impact assessment
+
+2. **Immediate Actions** (prioritized, specific commands):
+   - List 3-4 diagnostic commands with brief explanation of what each reveals
+   - Include actual command syntax (e.g., `ps aux --sort=-%mem | head -10`)
+   - Mention what values/outputs to look for
+
+3. **Quick Fix** (if applicable):
+   - One immediate action to mitigate the issue
+   - Example: "If memory > 90%, restart service X with: `sudo systemctl restart X`"
+
+4. **Prevention** (1-2 sentences):
+   - Specific configuration or monitoring to prevent recurrence
+   - Include actual settings/thresholds
+
+Be direct, practical, and avoid generic advice. Speak like an experienced engineer helping a colleague, not a textbook.
+Keep total response under 250 words.
+"""
     
     return prompt
 
