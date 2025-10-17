@@ -11,6 +11,7 @@ import httpx
 import time
 import json
 import os
+from pydantic import BaseModel
 from typing import Optional, Dict, Any, List
 from collections import defaultdict, deque
 from datetime import datetime, timedelta
@@ -20,6 +21,38 @@ import asyncio
 from dotenv import load_dotenv
 
 load_dotenv()  # Load .env variables
+
+# ============================================================================
+# PYDANTIC MODELS FOR API DOCUMENTATION
+# ============================================================================
+
+class IncidentAdd(BaseModel):
+    incident_id: str
+    title: str
+    description: str
+    service: str
+    root_cause: Optional[str] = ""
+    resolution: Optional[str] = ""
+    severity: Optional[str] = "medium"
+    tags: Optional[List[str]] = []
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "incident_id": "INC-2025-001",
+                "title": "High CPU usage on api-gateway",
+                "description": "CPU spiked to 95% at 2:15pm, causing slow response times",
+                "service": "api-gateway",
+                "root_cause": "Memory leak after v2.3.4 deployment",
+                "resolution": "Rolled back to v2.3.3 and deployed v2.3.5 with proper connection pooling",
+                "severity": "high",
+                "tags": ["cpu", "memory-leak", "performance"]
+            }
+        }
+
+# ============================================================================
+# APP SETUP
+# ============================================================================
 
 # Define app first
 app = FastAPI(
