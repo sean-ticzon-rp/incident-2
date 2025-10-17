@@ -19,8 +19,8 @@ logger = logging.getLogger(__name__)
 # Hugging Face API configuration
 HF_API_KEY = os.getenv("HUGGINGFACE_API_KEY", "")
 EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
-# Use feature-extraction task endpoint
-HF_API_URL = f"https://api-inference.huggingface.co/models/{EMBEDDING_MODEL}"
+# Use feature-extraction pipeline explicitly
+HF_API_URL = f"https://api-inference.huggingface.co/pipeline/feature-extraction/{EMBEDDING_MODEL}"
 
 class IncidentRAG:
     """
@@ -85,9 +85,13 @@ class IncidentRAG:
             "Content-Type": "application/json"
         }
 
-        # FIXED: Hugging Face expects just the text string or array of strings
+        # FIXED: Feature extraction pipeline expects this format
         payload = {
-            "inputs": text
+            "inputs": text,
+            "options": {
+                "wait_for_model": True,
+                "use_cache": True
+            }
         }
 
         async with httpx.AsyncClient(timeout=30.0) as client:
@@ -95,16 +99,19 @@ class IncidentRAG:
             
             if response.status_code == 200:
                 result = response.json()
-                # The result should be a list (embedding vector)
+                # Feature extraction returns nested arrays: [[embedding]]
                 if isinstance(result, list):
-                    # Handle both [[vector]] and [vector] formats
                     if len(result) > 0 and isinstance(result[0], list):
-                        return result[0]  # Nested array, return first element
+                        # Handle [[[embedding]]] or [[embedding]] format
+                        embedding = result[0]
+                        if isinstance(embedding, list) and len(embedding) > 0 and isinstance(embedding[0], list):
+                            return embedding[0]  # Triple nested
+                        return embedding  # Double nested
                     return result  # Already flat
                 return result
             elif response.status_code == 503:
-                logger.info("⏳ Model loading, retrying in 3 seconds...")
-                await asyncio.sleep(3)
+                logger.info("⏳ Model loading, retrying in 5 seconds...")
+                await asyncio.sleep(5)
                 return await self.get_embedding(text)
             else:
                 error_text = response.text
