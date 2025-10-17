@@ -99,7 +99,11 @@ if RAG_AVAILABLE:
         # FIX: IncidentRAG only accepts collection_name parameter
         # It reads QDRANT_URL from environment variables internally
         rag = IncidentRAG(collection_name="incidents")
+        
+        # Debug: Log available methods
+        rag_methods = [method for method in dir(rag) if not method.startswith('_')]
         logger.info(f"✅ RAG initialized with {rag.count_incidents()} incidents")
+        logger.info(f"🔍 Available RAG methods: {rag_methods}")
     except Exception as e:
         logger.error(f"⚠️ Could not initialize RAG: {e}")
         import traceback
@@ -656,6 +660,7 @@ async def health_check():
     }
     
     return health_status
+
 # ============================================================================
 # ANALYSIS ENDPOINTS
 # ============================================================================
@@ -674,11 +679,11 @@ async def analyze_basic(incident: dict):
     analytics_data["total_analyses"] += 1
     analytics_data["incidents_by_service"][service] += 1
     
-    # Search similar incidents
+    # Search similar incidents - FIXED: Use async
     similar_incidents = []
     if rag:
         try:
-            similar_incidents = rag.search_similar(
+            similar_incidents = await rag.search_similar_async(
                 query=f"{title}. {description}",
                 service=service,
                 limit=3
@@ -754,11 +759,11 @@ async def analyze_stream(incident: dict):
             start_time = time.time()
             analytics_data["total_analyses"] += 1
             
-            # Search similar
+            # Search similar - FIXED: Use async
             similar_incidents = []
             if rag:
                 try:
-                    similar_incidents = rag.search_similar(
+                    similar_incidents = await rag.search_similar_async(
                         query=f"{title}. {description}",
                         service=service,
                         limit=3
@@ -866,11 +871,11 @@ async def analyze_agentic_stream(incident: dict):
             yield f"data: {json.dumps({'type': 'status', 'message': 'Analyzing context...'})}\n\n"
             await asyncio.sleep(0.1)
             
-            # Search similar
+            # Search similar - FIXED: Use async
             similar_incidents = []
             if rag:
                 try:
-                    similar_incidents = rag.search_similar(
+                    similar_incidents = await rag.search_similar_async(
                         query=f"{title}. {description}",
                         service=service,
                         limit=3
@@ -990,74 +995,88 @@ async def clear_conversation(incident_id: str):
     }
 
 # ============================================================================
-# INCIDENT MANAGEMENT (keeping existing endpoints)
+# INCIDENT MANAGEMENT
 # ============================================================================
 
 @app.post("/incidents/seed")
 async def seed_incidents():
+    """Seed example incidents into the knowledge base"""
     if not rag:
         raise HTTPException(status_code=503, detail="RAG not available")
     
     try:
-        seed_example_data(rag)
+        await seed_example_data_async(rag)  # FIXED: Use async version
         return {
             "message": "✅ Incidents seeded successfully",
             "total": rag.count_incidents()
         }
     except Exception as e:
+        logger.error(f"Error seeding incidents: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/incidents/add")
-async def add_incident(incident: dict):
+async def add_incident(incident: IncidentAdd):
+    """
+    Add a resolved incident to the AI knowledge base for future reference.
+    
+    This endpoint stores incident details including root cause and resolution,
+    enabling the AI to provide better recommendations for similar future incidents.
+    """
     if not rag:
         raise HTTPException(status_code=503, detail="RAG not available")
     
-    required = ['incident_id', 'title', 'description', 'service']
-    if not all(k in incident for k in required):
-        raise HTTPException(status_code=400, detail=f"Missing required fields: {required}")
-    
     try:
-        doc_id = rag.add_incident(
-            incident_id=incident['incident_id'],
-            title=incident['title'],
-            description=incident['description'],
-            service=incident['service'],
-            root_cause=incident.get('root_cause', ''),
-            resolution=incident.get('resolution', ''),
-            severity=incident.get('severity', 'medium'),
-            tags=incident.get('tags', [])
+        # Convert Pydantic model to dict
+        incident_dict = incident.model_dump()
+        
+        # FIXED: Use async version
+        doc_id = await rag.add_incident_async(
+            incident_id=incident_dict['incident_id'],
+            title=incident_dict['title'],
+            description=incident_dict['description'],
+            service=incident_dict['service'],
+            root_cause=incident_dict.get('root_cause', ''),
+            resolution=incident_dict.get('resolution', ''),
+            severity=incident_dict.get('severity', 'medium'),
+            tags=incident_dict.get('tags', [])
         )
         return {
-            "message": "✅ Incident added",
+            "message": "✅ Incident added to knowledge base",
             "document_id": doc_id,
             "total_incidents": rag.count_incidents()
         }
     except Exception as e:
+        logger.error(f"Error adding incident: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/incidents/search")
 async def search_incidents(query: str, service: Optional[str] = None, limit: int = 5):
+    """Search for similar past incidents"""
     if not rag:
         raise HTTPException(status_code=503, detail="RAG not available")
     
     try:
-        results = rag.search_similar(query=query, service=service, limit=limit)
+        # FIXED: Use async version
+        results = await rag.search_similar_async(query=query, service=service, limit=limit)
         return {"query": query, "results": results, "count": len(results)}
     except Exception as e:
+        logger.error(f"Error searching incidents: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/incidents/count")
 async def count_incidents():
+    """Get total count of incidents in knowledge base"""
     if not rag:
         return {"count": 0, "rag_available": False}
     return {"count": rag.count_incidents(), "rag_available": True}
 
 # ============================================================================
-# ANALYTICS (keeping key endpoints)
+# ANALYTICS
 # ============================================================================
 
 @app.get("/api/analytics/overview")
 async def get_analytics_overview():
+    """Get analytics overview"""
     total = analytics_data["total_analyses"]
     avg_time = sum(analytics_data["response_times"]) / len(analytics_data["response_times"]) if analytics_data["response_times"] else 0
     success_rate = (analytics_data["successful_analyses"] / total * 100) if total > 0 else 0
@@ -1077,6 +1096,7 @@ async def get_analytics_overview():
 
 @app.get("/api/analytics/export")
 async def export_all_analytics():
+    """Export all analytics data"""
     total = analytics_data["total_analyses"]
     avg_time = sum(analytics_data["response_times"]) / len(analytics_data["response_times"]) if analytics_data["response_times"] else 0
     success_rate = (analytics_data["successful_analyses"] / total * 100) if total > 0 else 0
@@ -1105,6 +1125,19 @@ async def export_all_analytics():
 # ============================================================================
 # STARTUP
 # ============================================================================
+
+@app.on_event("startup")
+async def startup_event():
+    """Log startup information"""
+    logger.info("="*70)
+    logger.info("🚀 INCIDENT AI - GROQ API EDITION STARTING")
+    logger.info("="*70)
+    logger.info(f"🤖 Model: {MODEL_NAME}")
+    logger.info(f"🔑 Groq API Key: {'✅ Set' if GROQ_API_KEY else '❌ Not set'}")
+    logger.info(f"🔍 RAG: {'✅ Enabled' if rag else '❌ Disabled'}")
+    logger.info(f"📊 Incident Count: {rag.count_incidents() if rag else 0}")
+    logger.info(f"🌐 Port: {os.getenv('PORT', '8000')}")
+    logger.info("="*70)
 
 if __name__ == "__main__":
     import uvicorn
