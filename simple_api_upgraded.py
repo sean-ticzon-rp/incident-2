@@ -55,10 +55,11 @@ RAG_AVAILABLE = False
 rag = None
 
 try:
-    from rag_system import IncidentRAG, seed_example_data
+    from rag_system import IncidentRAG, seed_example_data_async
     RAG_AVAILABLE = True
-except ImportError:
-    logger.warning("⚠️ RAG system not available.")
+    logger.info("✅ RAG module imported successfully")
+except ImportError as e:
+    logger.warning(f"⚠️ RAG system not available: {e}")
 
 if RAG_AVAILABLE:
     try:
@@ -68,6 +69,8 @@ if RAG_AVAILABLE:
         logger.info(f"✅ RAG initialized with {rag.count_incidents()} incidents")
     except Exception as e:
         logger.error(f"⚠️ Could not initialize RAG: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
 
 # ============================================================================
 # CONFIGURATION - Set your API key here or in environment variable
