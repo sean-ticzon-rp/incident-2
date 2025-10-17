@@ -1,7 +1,6 @@
 """
-RAG System - Using Hugging Face Inference API for embeddings
-Works with Qdrant Cloud or local Qdrant
-NO PyTorch needed - keeps Docker image small!
+RAG System - Using Cohere API for embeddings
+FREE tier: 1000 calls/month - Perfect for testing!
 """
 
 import os
@@ -16,16 +15,15 @@ from qdrant_client.http.exceptions import UnexpectedResponse
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Hugging Face API configuration
-HF_API_KEY = os.getenv("HUGGINGFACE_API_KEY", "")
-EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
-# Correct endpoint for Hugging Face Inference API
-HF_API_URL = f"https://api-inference.huggingface.co/models/{EMBEDDING_MODEL}"
+# Cohere API configuration - FREE tier available!
+COHERE_API_KEY = os.getenv("COHERE_API_KEY", "")
+EMBEDDING_MODEL = "embed-english-light-v3.0"  # Fast, free, good quality
+COHERE_API_URL = "https://api.cohere.ai/v1/embed"
 
 class IncidentRAG:
     """
     RAG system for incident management
-    Uses Hugging Face API for embeddings
+    Uses Cohere API for embeddings - FREE tier!
     """
 
     def __init__(self, collection_name: str = "incidents"):
@@ -36,13 +34,13 @@ class IncidentRAG:
 
             self.client = QdrantClient(url=qdrant_url, api_key=qdrant_api_key, timeout=60.0)
             self.collection_name = collection_name
-            self.embedding_dim = 384
+            self.embedding_dim = 384  # embed-english-light-v3.0 dimension
 
-            if not HF_API_KEY:
-                logger.warning("⚠️ HUGGINGFACE_API_KEY not set - embeddings will fail!")
+            if not COHERE_API_KEY:
+                logger.warning("⚠️ COHERE_API_KEY not set - embeddings will fail!")
 
             self._init_collection()
-            logger.info("✅ RAG system initialized (Hugging Face API)")
+            logger.info("✅ RAG system initialized (Cohere API - FREE)")
         except Exception as e:
             logger.error(f"Failed to initialize RAG: {e}")
             raise
@@ -65,7 +63,6 @@ class IncidentRAG:
                 )
                 logger.info(f"✅ Created new collection '{self.collection_name}'")
             except UnexpectedResponse as create_error:
-                # Handle the case where collection was created between our check and create attempt
                 if "already exists" in str(create_error).lower():
                     logger.info(f"✅ Collection '{self.collection_name}' already exists (race condition handled)")
                 else:
@@ -76,54 +73,61 @@ class IncidentRAG:
                 raise
 
     async def get_embedding(self, text: str) -> list:
-        """Get embedding from Hugging Face API (async) - PUBLIC METHOD"""
-        if not HF_API_KEY:
-            raise Exception("HUGGINGFACE_API_KEY not set")
+        """Get embedding from Cohere API (async) - FREE tier available!"""
+        if not COHERE_API_KEY:
+            raise Exception("COHERE_API_KEY not set. Get free key at https://dashboard.cohere.com/api-keys")
 
         headers = {
-            "Authorization": f"Bearer {HF_API_KEY}"
+            "Authorization": f"Bearer {COHERE_API_KEY}",
+            "Content-Type": "application/json"
         }
 
-        # For sentence-transformers models, send as JSON with proper format
         payload = {
-            "inputs": text,
-            "options": {
-                "wait_for_model": True
-            }
+            "model": EMBEDDING_MODEL,
+            "texts": [text],  # Cohere accepts array of texts
+            "input_type": "search_document"  # For storing documents
         }
 
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            response = await client.post(HF_API_URL, headers=headers, json=payload)
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(COHERE_API_URL, headers=headers, json=payload)
             
             if response.status_code == 200:
                 result = response.json()
-                logger.info(f"✅ Got embedding, type: {type(result)}, length: {len(result) if isinstance(result, list) else 'N/A'}")
-                
-                # Handle different response formats
-                if isinstance(result, list):
-                    # Could be [embedding] or [[embedding]]
-                    if len(result) > 0:
-                        first = result[0]
-                        if isinstance(first, list):
-                            # [[embedding]] format
-                            logger.info(f"📊 Embedding dimension: {len(first)}")
-                            return first
-                        elif isinstance(first, (int, float)):
-                            # [embedding] format (flat array)
-                            logger.info(f"📊 Embedding dimension: {len(result)}")
-                            return result
-                return result
-                
-            elif response.status_code == 503:
-                logger.info("⏳ Model loading, retrying in 10 seconds...")
-                await asyncio.sleep(10)
-                return await self.get_embedding(text)
+                # Cohere returns: {"embeddings": [[...]], "id": "...", "texts": [...]}
+                embedding = result["embeddings"][0]
+                logger.info(f"✅ Got embedding, dimension: {len(embedding)}")
+                return embedding
             else:
                 error_text = response.text
-                logger.error(f"❌ Hugging Face API error: {response.status_code} - {error_text}")
-                logger.error(f"Request URL: {HF_API_URL}")
-                logger.error(f"Request payload: {payload}")
-                raise Exception(f"Hugging Face API error: {response.status_code} - {error_text}")
+                logger.error(f"❌ Cohere API error: {response.status_code} - {error_text}")
+                raise Exception(f"Cohere API error: {response.status_code} - {error_text}")
+
+    async def get_query_embedding(self, text: str) -> list:
+        """Get embedding for search queries (uses different input_type)"""
+        if not COHERE_API_KEY:
+            raise Exception("COHERE_API_KEY not set")
+
+        headers = {
+            "Authorization": f"Bearer {COHERE_API_KEY}",
+            "Content-Type": "application/json"
+        }
+
+        payload = {
+            "model": EMBEDDING_MODEL,
+            "texts": [text],
+            "input_type": "search_query"  # For search queries
+        }
+
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(COHERE_API_URL, headers=headers, json=payload)
+            
+            if response.status_code == 200:
+                result = response.json()
+                return result["embeddings"][0]
+            else:
+                error_text = response.text
+                logger.error(f"❌ Cohere API error: {response.status_code} - {error_text}")
+                raise Exception(f"Cohere API error: {response.status_code} - {error_text}")
 
     async def add_incident_async(self, incident_id: str, title: str, description: str,
                                  service: str, root_cause: str = "", resolution: str = "",
@@ -155,13 +159,13 @@ class IncidentRAG:
         )
 
         self.client.upsert(collection_name=self.collection_name, points=[point])
-        logger.info(f"Added incident: {incident_id}")
+        logger.info(f"✅ Added incident: {incident_id}")
         return doc_id
 
     async def search_similar_async(self, query: str, service: str = None, limit: int = 3) -> list:
         """Search for similar past incidents (ASYNC VERSION)"""
         try:
-            query_vector = await self.get_embedding(query)
+            query_vector = await self.get_query_embedding(query)  # Use search_query type
         except Exception as e:
             logger.error(f"Failed to get embedding for search: {e}")
             return []
