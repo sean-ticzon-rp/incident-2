@@ -1,6 +1,6 @@
 """
 RAG System - Using Cohere API for embeddings
-FREE tier: 1000 calls/month - Perfect for testing!
+FIXED: Better error handling for index creation
 """
 
 import os
@@ -15,16 +15,13 @@ from qdrant_client.http.exceptions import UnexpectedResponse
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Cohere API configuration - FREE tier available!
+# Cohere API configuration
 COHERE_API_KEY = os.getenv("COHERE_API_KEY", "")
-EMBEDDING_MODEL = "embed-english-light-v3.0"  # Fast, free, good quality
+EMBEDDING_MODEL = "embed-english-light-v3.0"
 COHERE_API_URL = "https://api.cohere.ai/v1/embed"
 
 class IncidentRAG:
-    """
-    RAG system for incident management
-    Uses Cohere API for embeddings - FREE tier!
-    """
+    """RAG system for incident management"""
 
     def __init__(self, collection_name: str = "incidents"):
         """Initialize RAG system"""
@@ -34,7 +31,7 @@ class IncidentRAG:
 
             self.client = QdrantClient(url=qdrant_url, api_key=qdrant_api_key, timeout=60.0)
             self.collection_name = collection_name
-            self.embedding_dim = 384  # embed-english-light-v3.0 dimension
+            self.embedding_dim = 384
 
             if not COHERE_API_KEY:
                 logger.warning("⚠️ COHERE_API_KEY not set - embeddings will fail!")
@@ -46,34 +43,20 @@ class IncidentRAG:
             raise
 
     def _init_collection(self):
-        """Create vector collection for incidents if it doesn't exist"""
+        """Create vector collection with proper indexes"""
         try:
             # Try to get the collection
             collection_info = self.client.get_collection(self.collection_name)
-            logger.info(f"✅ Collection '{self.collection_name}' already exists ({collection_info.points_count} incidents)")
+            logger.info(f"✅ Collection '{self.collection_name}' exists ({collection_info.points_count} incidents)")
             
-            # Check if payload indexes exist, create if missing
-            try:
-                from qdrant_client.models import PayloadSchemaType, PayloadIndexParams
-                
-                # Create index for 'service' field if it doesn't exist
-                self.client.create_payload_index(
-                    collection_name=self.collection_name,
-                    field_name="service",
-                    field_schema=PayloadSchemaType.KEYWORD
-                )
-                logger.info("✅ Created payload index for 'service' field")
-            except Exception as index_error:
-                if "already exists" in str(index_error).lower():
-                    logger.info("✅ Payload indexes already exist")
-                else:
-                    logger.warning(f"⚠️ Could not create payload index: {index_error}")
-                    
+            # CRITICAL: Ensure payload index exists
+            self._ensure_payload_indexes()
+            
         except Exception as get_error:
-            # Collection doesn't exist, try to create it
+            # Collection doesn't exist, create it
+            logger.info(f"📦 Creating new collection '{self.collection_name}'...")
+            
             try:
-                from qdrant_client.models import PayloadSchemaType
-                
                 self.client.create_collection(
                     collection_name=self.collection_name,
                     vectors_config=VectorParams(
@@ -81,28 +64,49 @@ class IncidentRAG:
                         distance=Distance.COSINE
                     )
                 )
-                logger.info(f"✅ Created new collection '{self.collection_name}'")
+                logger.info(f"✅ Created collection '{self.collection_name}'")
                 
-                # Create payload index for filtering by service
-                self.client.create_payload_index(
-                    collection_name=self.collection_name,
-                    field_name="service",
-                    field_schema=PayloadSchemaType.KEYWORD
-                )
-                logger.info("✅ Created payload index for 'service' field")
+                # Create payload index immediately after collection creation
+                self._ensure_payload_indexes()
                 
             except UnexpectedResponse as create_error:
                 if "already exists" in str(create_error).lower():
-                    logger.info(f"✅ Collection '{self.collection_name}' already exists (race condition handled)")
+                    logger.info(f"✅ Collection already exists (race condition handled)")
+                    self._ensure_payload_indexes()
                 else:
                     logger.error(f"Failed to create collection: {create_error}")
                     raise
-            except Exception as create_error:
-                logger.error(f"Failed to create collection: {create_error}")
-                raise
+
+    def _ensure_payload_indexes(self):
+        """Ensure payload indexes exist - CRITICAL for filtering"""
+        try:
+            logger.info("🔧 Creating/verifying payload index for 'service' field...")
+            
+            self.client.create_payload_index(
+                collection_name=self.collection_name,
+                field_name="service",
+                field_schema=PayloadSchemaType.KEYWORD
+            )
+            logger.info("✅ Payload index for 'service' field created/verified")
+            
+        except UnexpectedResponse as index_error:
+            error_msg = str(index_error).lower()
+            
+            if "already exists" in error_msg or "duplicate" in error_msg:
+                logger.info("✅ Payload index already exists - skipping")
+            else:
+                logger.error(f"⚠️ Failed to create payload index: {index_error}")
+                logger.warning("⚠️ Filtering by service may not work properly!")
+                
+                # Try alternative: recreate collection
+                if "not found" in error_msg or "doesn't exist" in error_msg:
+                    logger.warning("⚠️ Collection might be corrupted. Consider recreating it.")
+        
+        except Exception as e:
+            logger.error(f"⚠️ Unexpected error creating index: {e}")
 
     async def get_embedding(self, text: str) -> list:
-        """Get embedding from Cohere API (async) - FREE tier available!"""
+        """Get embedding from Cohere API (async)"""
         if not COHERE_API_KEY:
             raise Exception("COHERE_API_KEY not set. Get free key at https://dashboard.cohere.com/api-keys")
 
@@ -113,8 +117,8 @@ class IncidentRAG:
 
         payload = {
             "model": EMBEDDING_MODEL,
-            "texts": [text],  # Cohere accepts array of texts
-            "input_type": "search_document"  # For storing documents
+            "texts": [text],
+            "input_type": "search_document"
         }
 
         async with httpx.AsyncClient(timeout=30.0) as client:
@@ -122,7 +126,6 @@ class IncidentRAG:
             
             if response.status_code == 200:
                 result = response.json()
-                # Cohere returns: {"embeddings": [[...]], "id": "...", "texts": [...]}
                 embedding = result["embeddings"][0]
                 logger.info(f"✅ Got embedding, dimension: {len(embedding)}")
                 return embedding
@@ -132,7 +135,7 @@ class IncidentRAG:
                 raise Exception(f"Cohere API error: {response.status_code} - {error_text}")
 
     async def get_query_embedding(self, text: str) -> list:
-        """Get embedding for search queries (uses different input_type)"""
+        """Get embedding for search queries"""
         if not COHERE_API_KEY:
             raise Exception("COHERE_API_KEY not set")
 
@@ -144,7 +147,7 @@ class IncidentRAG:
         payload = {
             "model": EMBEDDING_MODEL,
             "texts": [text],
-            "input_type": "search_query"  # For search queries
+            "input_type": "search_query"
         }
 
         async with httpx.AsyncClient(timeout=30.0) as client:
@@ -194,7 +197,7 @@ class IncidentRAG:
     async def search_similar_async(self, query: str, service: str = None, limit: int = 3) -> list:
         """Search for similar past incidents (ASYNC VERSION)"""
         try:
-            query_vector = await self.get_query_embedding(query)  # Use search_query type
+            query_vector = await self.get_query_embedding(query)
         except Exception as e:
             logger.error(f"Failed to get embedding for search: {e}")
             return []
@@ -206,26 +209,37 @@ class IncidentRAG:
             "with_payload": True
         }
 
+        # FIXED: Only add filter if service is provided AND index exists
         if service:
-            search_params["query_filter"] = Filter(
-                must=[FieldCondition(key="service", match=MatchValue(value=service))]
-            )
+            try:
+                search_params["query_filter"] = Filter(
+                    must=[FieldCondition(key="service", match=MatchValue(value=service))]
+                )
+                logger.info(f"🔍 Searching with service filter: {service}")
+            except Exception as filter_error:
+                logger.warning(f"⚠️ Could not apply service filter: {filter_error}")
+                logger.info("🔍 Searching without service filter...")
+                # Continue without filter
 
-        results = self.client.search(**search_params)
-        return [
-            {
-                "incident_id": hit.payload.get("incident_id"),
-                "similarity_score": round(hit.score, 3),
-                "title": hit.payload.get("title"),
-                "description": hit.payload.get("description"),
-                "service": hit.payload.get("service"),
-                "root_cause": hit.payload.get("root_cause"),
-                "resolution": hit.payload.get("resolution"),
-                "severity": hit.payload.get("severity"),
-                "tags": hit.payload.get("tags", [])
-            }
-            for hit in results
-        ]
+        try:
+            results = self.client.search(**search_params)
+            return [
+                {
+                    "incident_id": hit.payload.get("incident_id"),
+                    "similarity_score": round(hit.score, 3),
+                    "title": hit.payload.get("title"),
+                    "description": hit.payload.get("description"),
+                    "service": hit.payload.get("service"),
+                    "root_cause": hit.payload.get("root_cause"),
+                    "resolution": hit.payload.get("resolution"),
+                    "severity": hit.payload.get("severity"),
+                    "tags": hit.payload.get("tags", [])
+                }
+                for hit in results
+            ]
+        except Exception as search_error:
+            logger.error(f"Search failed: {search_error}")
+            return []
 
     def count_incidents(self) -> int:
         """Count total incidents in knowledge base"""
@@ -235,7 +249,7 @@ class IncidentRAG:
         except Exception:
             return 0
 
-# Optional helper to seed example data
+# Helper to seed example data
 async def seed_example_data_async(rag: IncidentRAG):
     """Add some example incidents for testing (ASYNC VERSION)"""
     examples = [
