@@ -448,67 +448,76 @@ def build_conversation_aware_prompt(
     question_lower = user_question.lower()
     
     asking_about_similar = any(word in question_lower for word in 
-                               ["similar", "past", "previous", "related", "other", "cases", "guide"])
+                               ["similar", "past", "previous", "related", "other", "cases", "history"])
     
     asking_without_similar = any(phrase in question_lower for phrase in 
                                  ["without", "instead of", "other than", "different", "alternative"])
     
-    if asking_without_similar and similar:
-        prompt = f"""You're helping with: {title}
+    # CRITICAL: Handle questions about similar incidents honestly
+    if asking_about_similar:
+        if similar and len(similar) > 0:
+            prompt = f"""The user asked: "{user_question}"
 
-The user asked: "{user_question}"
-
-**Important:** The user explicitly wants to solve this WITHOUT using the similar incident approach.
-
-**Previous conversation:**
+**Available Past Incidents in Database:**
 """
-        for msg in conversation_history[-4:]:
-            role = "User" if msg["role"] == "user" else "You"
+            for idx, inc in enumerate(similar[:3], 1):
+                sim_pct = int(inc['similarity_score'] * 100)
+                prompt += f"""
+{idx}. Incident {inc['incident_id']} ({sim_pct}% similarity)
+   - Title: {inc['title']}
+   - Root Cause: {inc['root_cause']}
+   - Resolution: {inc['resolution']}
+"""
+            
+            prompt += f"""
+
+Answer the user's question about these similar incidents. Be honest about similarity percentages.
+If similarity is low (under 60%), acknowledge they're not very similar.
+Keep response under 150 words."""
+        else:
+            prompt = f"""The user asked: "{user_question}"
+
+**IMPORTANT:** There are NO similar incidents in the database for this issue.
+
+Be honest and say: "I don't have any similar incidents in the knowledge base yet. This appears to be the first time we're seeing this pattern."
+
+Then offer to help analyze the current incident instead. Keep under 100 words."""
+    
+    elif asking_without_similar and similar:
+        prompt = f"""User asked: "{user_question}"
+
+They want a DIFFERENT approach than using similar incidents.
+
+**Previous suggestions to AVOID:**
+{', '.join(already_mentioned['commands']) if already_mentioned['commands'] else 'None yet'}
+
+Provide completely different troubleshooting:
+1. Alternative diagnostic approach
+2. Different root cause hypothesis  
+3. Specific actions not mentioned before
+
+Be specific with commands. Under 150 words."""
+    
+    else:
+        # General follow-up question
+        prompt = f"""Continuing conversation about: {title}
+
+**Recent discussion:**
+"""
+        for msg in conversation_history[-3:]:
+            role = "User" if msg["role"] == "user" else "You previously said"
             prompt += f"{role}: {msg['content'][:120]}...\n"
         
         prompt += f"""
 
-**Commands already suggested (DON'T repeat these):**
-{', '.join(already_mentioned['commands']) if already_mentioned['commands'] else 'None yet'}
+User's new question: "{user_question}"
 
-**Provide COMPLETELY DIFFERENT troubleshooting:**
-
-1. Alternative diagnostic (different from what you said before)
-2. Different root cause angle
-3. Quick fixes
-
-Keep under 150 words. Be specific."""
-
-    elif asking_about_similar and similar:
-        best = similar[0]
-        prompt = f"""User asked: "{user_question}"
-
-**Found: Incident {best['incident_id']} (73% match)**
-
-What happened: {best['title']}
-Root cause: {best['root_cause']}
-How we fixed it: {best['resolution']}
-
-Answer the user's question about this similar case. Be conversational. Under 150 words."""
-
-    else:
-        prompt = f"""Conversation about: {title}
-
-**Recent chat:**
-"""
-        for msg in conversation_history[-4:]:
-            role = "User" if msg["role"] == "user" else "You"
-            prompt += f"{role}: {msg['content'][:100]}...\n"
-        
-        prompt += f"""
-
-User asked: "{user_question}"
-
-**Already covered (don't repeat):**
+**Already discussed (don't repeat):**
 - Commands: {', '.join(already_mentioned['commands']) if already_mentioned['commands'] else 'none'}
 - Topics: {', '.join(already_mentioned['topics']) if already_mentioned['topics'] else 'none'}
 
-Answer directly. Reference what was discussed. Add NEW information. Under 120 words."""
+Provide a NEW, specific answer. Reference previous discussion naturally. Add practical value.
+Under 150 words."""
     
     return prompt
 
