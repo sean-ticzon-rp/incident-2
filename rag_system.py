@@ -1,6 +1,6 @@
 """
-RAG System - Using Cohere API for embeddings
-FIXED: Better error handling for index creation
+RAG System - QUICK FIX VERSION
+Removes service filtering to make similarity search work immediately
 """
 
 import os
@@ -9,7 +9,7 @@ import logging
 import asyncio
 import httpx
 from qdrant_client import QdrantClient
-from qdrant_client.models import Distance, VectorParams, PointStruct, Filter, FieldCondition, MatchValue, PayloadSchemaType
+from qdrant_client.models import Distance, VectorParams, PointStruct
 from qdrant_client.http.exceptions import UnexpectedResponse
 
 logging.basicConfig(level=logging.INFO)
@@ -37,20 +37,17 @@ class IncidentRAG:
                 logger.warning("⚠️ COHERE_API_KEY not set - embeddings will fail!")
 
             self._init_collection()
-            logger.info("✅ RAG system initialized (Cohere API - FREE)")
+            logger.info("✅ RAG system initialized (Cohere API - NO SERVICE FILTER)")
         except Exception as e:
             logger.error(f"Failed to initialize RAG: {e}")
             raise
 
     def _init_collection(self):
-        """Create vector collection with proper indexes"""
+        """Create vector collection - SIMPLE VERSION"""
         try:
             # Try to get the collection
             collection_info = self.client.get_collection(self.collection_name)
             logger.info(f"✅ Collection '{self.collection_name}' exists ({collection_info.points_count} incidents)")
-            
-            # CRITICAL: Ensure payload index exists
-            self._ensure_payload_indexes()
             
         except Exception as get_error:
             # Collection doesn't exist, create it
@@ -66,44 +63,12 @@ class IncidentRAG:
                 )
                 logger.info(f"✅ Created collection '{self.collection_name}'")
                 
-                # Create payload index immediately after collection creation
-                self._ensure_payload_indexes()
-                
             except UnexpectedResponse as create_error:
                 if "already exists" in str(create_error).lower():
-                    logger.info(f"✅ Collection already exists (race condition handled)")
-                    self._ensure_payload_indexes()
+                    logger.info(f"✅ Collection already exists (race condition)")
                 else:
                     logger.error(f"Failed to create collection: {create_error}")
                     raise
-
-    def _ensure_payload_indexes(self):
-        """Ensure payload indexes exist - CRITICAL for filtering"""
-        try:
-            logger.info("🔧 Creating/verifying payload index for 'service' field...")
-            
-            self.client.create_payload_index(
-                collection_name=self.collection_name,
-                field_name="service",
-                field_schema=PayloadSchemaType.KEYWORD
-            )
-            logger.info("✅ Payload index for 'service' field created/verified")
-            
-        except UnexpectedResponse as index_error:
-            error_msg = str(index_error).lower()
-            
-            if "already exists" in error_msg or "duplicate" in error_msg:
-                logger.info("✅ Payload index already exists - skipping")
-            else:
-                logger.error(f"⚠️ Failed to create payload index: {index_error}")
-                logger.warning("⚠️ Filtering by service may not work properly!")
-                
-                # Try alternative: recreate collection
-                if "not found" in error_msg or "doesn't exist" in error_msg:
-                    logger.warning("⚠️ Collection might be corrupted. Consider recreating it.")
-        
-        except Exception as e:
-            logger.error(f"⚠️ Unexpected error creating index: {e}")
 
     async def get_embedding(self, text: str) -> list:
         """Get embedding from Cohere API (async)"""
@@ -127,7 +92,6 @@ class IncidentRAG:
             if response.status_code == 200:
                 result = response.json()
                 embedding = result["embeddings"][0]
-                logger.info(f"✅ Got embedding, dimension: {len(embedding)}")
                 return embedding
             else:
                 error_text = response.text
@@ -164,7 +128,7 @@ class IncidentRAG:
     async def add_incident_async(self, incident_id: str, title: str, description: str,
                                  service: str, root_cause: str = "", resolution: str = "",
                                  severity: str = "medium", tags: list = None) -> str:
-        """Add a past incident to the knowledge base (ASYNC VERSION)"""
+        """Add a past incident to the knowledge base"""
         text = f"Incident: {title}\nDescription: {description}\nService: {service}\nRoot Cause: {root_cause}\nResolution: {resolution}".strip()
         
         try:
@@ -195,34 +159,31 @@ class IncidentRAG:
         return doc_id
 
     async def search_similar_async(self, query: str, service: str = None, limit: int = 3) -> list:
-        """Search for similar past incidents (ASYNC VERSION)"""
+        """
+        Search for similar past incidents
+        FIXED: NO SERVICE FILTERING - searches all incidents regardless of service
+        """
         try:
             query_vector = await self.get_query_embedding(query)
         except Exception as e:
             logger.error(f"Failed to get embedding for search: {e}")
             return []
 
+        # CRITICAL FIX: Remove service filter completely
         search_params = {
             "collection_name": self.collection_name,
             "query_vector": query_vector,
             "limit": limit,
             "with_payload": True
+            # NO FILTER - search everything!
         }
 
-        # FIXED: Only add filter if service is provided AND index exists
-        if service:
-            try:
-                search_params["query_filter"] = Filter(
-                    must=[FieldCondition(key="service", match=MatchValue(value=service))]
-                )
-                logger.info(f"🔍 Searching with service filter: {service}")
-            except Exception as filter_error:
-                logger.warning(f"⚠️ Could not apply service filter: {filter_error}")
-                logger.info("🔍 Searching without service filter...")
-                # Continue without filter
+        logger.info(f"🔍 Searching ALL incidents (no service filter)")
 
         try:
             results = self.client.search(**search_params)
+            logger.info(f"✅ Found {len(results)} similar incidents")
+            
             return [
                 {
                     "incident_id": hit.payload.get("incident_id"),
@@ -251,29 +212,41 @@ class IncidentRAG:
 
 # Helper to seed example data
 async def seed_example_data_async(rag: IncidentRAG):
-    """Add some example incidents for testing (ASYNC VERSION)"""
+    """Add some example incidents for testing"""
     examples = [
         {
             "incident_id": "INC-00234",
             "title": "High CPU usage on api-gateway",
-            "description": "CPU spiked to 95% at 2:15pm.",
+            "description": "CPU spiked to 95% at 2:15pm causing slow response times",
             "service": "api-gateway",
             "root_cause": "Memory leak after v2.3.4 deployment",
-            "resolution": "Rolled back and deployed v2.3.5",
+            "resolution": "Rolled back to v2.3.3 and deployed v2.3.5 with proper connection pooling",
             "severity": "high",
-            "tags": ["cpu", "memory-leak"]
+            "tags": ["cpu", "memory-leak", "performance"]
         },
         {
             "incident_id": "INC-00567",
             "title": "Database connection pool exhausted",
-            "description": "All connections in use, 504 errors",
-            "service": "user-service",
-            "root_cause": "Missing index on users table",
-            "resolution": "Added index",
+            "description": "All connections in use, 504 errors across all services",
+            "service": "database",
+            "root_cause": "Missing index on users table caused slow queries that held connections",
+            "resolution": "Added composite index on users(email, status) and increased pool size",
             "severity": "critical",
-            "tags": ["database", "timeout"]
+            "tags": ["database", "timeout", "performance"]
+        },
+        {
+            "incident_id": "INC-00789",
+            "title": "Memory leak in payment processing",
+            "description": "Payment service memory usage growing steadily, eventually crashes",
+            "service": "payment-service",
+            "root_cause": "Webhook responses not properly closed, file handles accumulating",
+            "resolution": "Fixed webhook client to properly close connections and added memory monitoring",
+            "severity": "high",
+            "tags": ["memory-leak", "payment", "crash"]
         }
     ]
+    
     for ex in examples:
         await rag.add_incident_async(**ex)
+    
     logger.info(f"✅ Seeded {len(examples)} example incidents")
